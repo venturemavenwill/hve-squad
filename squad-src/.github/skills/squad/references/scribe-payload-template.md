@@ -28,7 +28,7 @@ State the resolved `squadRoot` this payload targets. The default `.copilot-track
 
 ### 1.3 Run Identity
 
-State `run id`, `turn`, `stage` (when the run is autopilot or autonomous), and a `timestamp` in the format the target entry heading uses. These four identify the run and turn and are carried into every entry, decision, and ledger row this dispatch writes.
+State `run id`, `turn`, `stage` (when the run is autopilot or autonomous), and the coordinator's `timestamp` (current UTC, `yyyy-MM-ddTHH:mm:ssZ`), written verbatim, never derived from local time. These carry into every entry, decision, and ledger row.
 
 ### 1.4 History Records (When Payload Type Is `history`)
 
@@ -68,6 +68,8 @@ turn: <n>
 stage: <stage name, autopilot/autonomous runs only>
 costPreflightReset: <not-requested | omit>
 timestamp: <ISO or the entry-heading format in use>
+workstream: <id; Scribe writes * Workstream: line>
+launchedAt: <ISO, with workstream>
 historyRecords:
   - agent: <name: frontmatter value, verbatim>
     request: <scoped request>

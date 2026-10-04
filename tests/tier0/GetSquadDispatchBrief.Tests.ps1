@@ -1,0 +1,125 @@
+#Requires -Modules Pester
+# Copyright (c) 2026 Microsoft Corporation. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+# Behavioral coverage for the read-only dispatch brief, squad skill
+# scripts/Get-SquadDispatchBrief.ps1. Runs the script as a child process against TestDrive
+# repositories, because it calls `exit`. Invokes no model.
+
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'PackageRoot',
+    Justification = 'Read inside BeforeAll, which PSScriptAnalyzer treats as an unrelated scope.')]
+param(
+    [Parameter(Mandatory)]
+    [string]$PackageRoot
+)
+
+BeforeAll {
+    $script:Script = Join-Path $PackageRoot '.agents/skills/squad/scripts/Get-SquadDispatchBrief.ps1'
+    $script:Utf8 = [System.Text.UTF8Encoding]::new($false)
+
+    function Invoke-Brief {
+        param([Parameter(Mandatory)][string]$Repo, [string[]]$Extra = @())
+        Push-Location $Repo
+        try {
+            $output = & pwsh -NoProfile -File $script:Script -SquadRoot '.copilot-tracking/squad' @Extra 2>&1 | Out-String
+            [pscustomobject]@{ ExitCode = $LASTEXITCODE; Output = $output }
+        }
+        finally { Pop-Location }
+    }
+
+    function Write-Text {
+        param([string]$Path, [string]$Text)
+        New-Item -ItemType Directory -Path (Split-Path -Parent $Path) -Force | Out-Null
+        [System.IO.File]::WriteAllText($Path, $Text, $script:Utf8)
+    }
+
+    function New-BriefRepo {
+        param(
+            [switch]$Uninitialized,
+            [switch]$Ceiling,
+            [switch]$StubLedger,
+            [switch]$BlockedReviewer
+        )
+        $repo = Join-Path $TestDrive "repo-$([guid]::NewGuid().ToString('N').Substring(0, 8))"
+        $squad = Join-Path $repo '.copilot-tracking/squad'
+        New-Item -ItemType Directory -Path $squad -Force | Out-Null
+        $agents = Join-Path $repo '.github/agents'
+        Write-Text (Join-Path $agents 'squad-implementor.agent.md') "---`nname: Squad Implementor`nmodel: Claude Sonnet 5 (copilot)`n---`n`nBody.`n"
+        $flag = if ($BlockedReviewer) { "disable-model-invocation: true`n" } else { '' }
+        Write-Text (Join-Path $agents 'squad-reviewer.agent.md') "---`nname: Squad Reviewer`n$($flag)model: Claude Haiku 4.5 (copilot)`n---`n`nBody.`n"
+        if ($Uninitialized) { return $repo }
+        Write-Text (Join-Path $squad 'team.md') (@(
+                '# Squad Team', '',
+                '| Role | Primary | Alternate Agents | Selection Cue | Deliverable Root | Model Tier | Member Name |',
+                '| ---- | ------- | ---------------- | ------------- | ---------------- | ---------- | ----------- |',
+                '| developer | Squad Implementor | — | — | `.copilot-tracking/changes/` | default | — |',
+                '| tester | Squad Reviewer | — | — | `.copilot-tracking/reviews/` | fast | — |'
+            ) -join "`n")
+        $preflight = if ($Ceiling) { '{"ceilingUsd":5,"decision":"within-ceiling"}' } else { '{"ceilingUsd":null,"decision":"not-requested"}' }
+        Write-Text (Join-Path $squad 'state.json') ('{"schemaVersion":"1.4","updated":"2026-10-03T18:00:00Z","turn":4,"mode":"interactive","currentRun":{"costPreflight":' + $preflight + '}}')
+        $ledger = if ($StubLedger) { "# Squad Consumption Ledger`n" } else { "# Squad Consumption Ledger`n`n## Attribution`n`n## Usage & Cost`n`n### Derivation`n" }
+        Write-Text (Join-Path $squad 'consumption.md') $ledger
+        $repo
+    }
+
+    function Get-TreeHash {
+        param([string]$Root)
+        (Get-ChildItem -LiteralPath $Root -Recurse -File | Sort-Object FullName | ForEach-Object { (Get-FileHash -LiteralPath $_.FullName).Hash }) -join ','
+    }
+}
+
+Describe 'Get-SquadDispatchBrief.ps1' {
+    It 'reports an uninitialized squad and defers to the full references' {
+        $result = Invoke-Brief -Repo (New-BriefRepo -Uninitialized)
+        $result.ExitCode | Should -Be 0
+        $result.Output | Should -Match 'status: NOT INITIALIZED'
+    }
+
+    It 'prints the roster with pins, rate rows, dispatchability, the next turn, and the bounded procedure, and writes nothing' {
+        $repo = New-BriefRepo
+        $before = Get-TreeHash -Root $repo
+        $result = Invoke-Brief -Repo $repo -Extra @('-SessionModel', 'claude-sonnet-5')
+        $result.ExitCode | Should -Be 0
+        $result.Output | Should -Match ([regex]::Escape('next hand-off turn: 5'))
+        $result.Output | Should -Match ([regex]::Escape('updated 2026-10-03T18:00:00Z'))
+        $result.Output | Should -Match '\| developer \| Squad Implementor \| yes \| Claude Sonnet 5 \| Claude Sonnet 5 \(default\) \|'
+        $result.Output | Should -Match '\| tester \| Squad Reviewer \| yes \| Claude Haiku 4\.5 \| Claude Haiku 4\.5 \(fast\) \|'
+        $result.Output | Should -Match ([regex]::Escape('roster precheck (Step 1b): PASS'))
+        $result.Output | Should -Match ([regex]::Escape('never `general-purpose`'))
+        $result.Output | Should -Match 'coverage: for a request that meets every Bounded Lane criterion'
+        $result.Output | Should -Match '"model_source":"agent-pinned"'
+        $result.Output | Should -Match '(?m)^### Bounded Lane'
+        $result.Output | Should -Match '(?m)^### Owner Finish Barrier'
+        $result.Output | Should -Match '(?m)^### Script Hand-off'
+        $result.Output | Should -Not -Match '(?m)^## Background Workstreams Procedure'
+        Get-TreeHash -Root $repo | Should -Be $before
+    }
+
+    It 'stays under the host inline output limit without -Background' {
+        $result = Invoke-Brief -Repo (New-BriefRepo)
+        [System.Text.Encoding]::UTF8.GetByteCount($result.Output) | Should -BeLessThan 20480
+        $result.Output | Should -Not -Match 'WARN brief exceeds'
+    }
+
+    It 'flags a disable-model-invocation Primary as not dispatchable and fails the precheck' {
+        $result = Invoke-Brief -Repo (New-BriefRepo -BlockedReviewer)
+        $result.Output | Should -Match '\| tester \| Squad Reviewer \| no \(disable-model-invocation\) \|'
+        $result.Output | Should -Match ([regex]::Escape('roster precheck (Step 1b): FAIL for tester -> Squad Reviewer'))
+    }
+
+    It 'withdraws coverage under an active cost ceiling' {
+        $result = Invoke-Brief -Repo (New-BriefRepo -Ceiling)
+        $result.Output | Should -Match 'cost ceiling: active'
+        $result.Output | Should -Match 'coverage: NONE'
+    }
+
+    It 'reports a stub ledger so no Scribe repair is dispatched' {
+        $result = Invoke-Brief -Repo (New-BriefRepo -StubLedger)
+        $result.Output | Should -Match ([regex]::Escape('ledger: stub (do not dispatch the Scribe'))
+    }
+
+    It 'embeds the Background Workstreams Procedure with -Background' {
+        $result = Invoke-Brief -Repo (New-BriefRepo) -Extra @('-Background')
+        $result.Output | Should -Match '(?m)^## Background Workstreams Procedure'
+    }
+}

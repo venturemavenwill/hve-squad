@@ -274,7 +274,7 @@ Describe 'Coordinator tool boundary and budget fail-closed (RTE-42 to RTE-44)' {
     }
 
     It 'the coordinator tools list is exactly the reviewed set, so any change is deliberate' {
-        $expected = @('read', 'search', 'agent', 'execute', 'vscode/askQuestions', 'todo', 'view', 'glob', 'grep', 'task', 'powershell', 'bash', 'ask_user')
+        $expected = @('read', 'search', 'agent', 'execute', 'vscode/askQuestions', 'todo', 'view', 'glob', 'grep', 'task', 'read_agent', 'powershell', 'bash', 'ask_user')
         $script:CoordinatorTools.Count | Should -Be $expected.Count
         @($script:CoordinatorTools | Sort-Object) | Should -Be @($expected | Sort-Object)
     }
@@ -590,6 +590,14 @@ Describe 'Deterministic hand-off and fast-path wording pins' {
         $script:Gates | Should -Match ([regex]::Escape('apply the *Owner Finish Barrier* in `references/operating-procedure.md`'))
     }
 
+    It 'a stub ledger is reseeded by the hand-off script, and every Scribe payload carries a shell-derived UTC timestamp' {
+        $script:OperatingProcedure | Should -Match ([regex]::Escape('lacks all three ledger sections (a header-only stub), do not dispatch the Scribe: the next `scripts/Write-SquadHandoff.ps1` hand-off reseeds it'))
+        $script:OperatingProcedure | Should -Match ([regex]::Escape('Only a partially-sectioned or otherwise inconsistent ledger needs the Scribe'))
+        $script:OperatingProcedure | Should -Match ([regex]::Escape('[DateTime]::UtcNow.ToString(''yyyy-MM-ddTHH:mm:ssZ'')'))
+        $script:OperatingProcedure | Should -Match ([regex]::Escape('the Scribe writes it verbatim and never derives one'))
+        (Get-SquadReferenceBody -Name 'scribe-payload-template.md') | Should -Match ([regex]::Escape('written verbatim, never derived from local time'))
+    }
+
     It 'the bounded owner brief names files, change, validation, change record, and the no-exploration line without dropping standards or the change record' {
         $script:Gates | Should -Match ([regex]::Escape('carries the exact target files (its full write set'))
         $script:Gates | Should -Match ([regex]::Escape('the exact change, the validation command, the change-record path'))
@@ -640,5 +648,150 @@ Describe 'Deterministic hand-off and fast-path wording pins' {
             $agent.Body | Should -Match ([regex]::Escape('For a `bounded` dispatch')) -Because $name
             $agent.Body | Should -Match ([regex]::Escape('do not explore the repository')) -Because $name
         }
+    }
+}
+
+Describe 'Background workstream fan-out (RTE-51)' {
+    BeforeAll {
+        $script:Lead = @($script:Model.SquadAgents | Where-Object Name -eq 'squad-workstream-lead.agent.md')[0]
+        $script:BgText = Get-Section -Body $script:Gates -Heading '## Background Workstreams Procedure (Interactive Mode Only)'
+    }
+
+    It 'the Workstream Lead exists, is not user-invocable, is pinned like the Squad Lead, and declares no tools so its children keep their own' {
+        $script:Lead | Should -Not -BeNullOrEmpty
+        $script:Lead.Meta['name'] | Should -Be 'Squad Workstream Lead'
+        $script:Lead.Meta['user-invocable'] | Should -Be 'false'
+        $script:Lead.Meta.ContainsKey('tools') | Should -BeFalse
+        $script:Lead.Meta['model'] | Should -Be 'Claude Sonnet 5 (copilot)'
+        $script:Lead.Meta['model'] | Should -Be (@($script:Model.SquadAgents | Where-Object Name -eq 'squad-lead.agent.md')[0]).Meta['model']
+        @($script:Lead.Meta['agents']) | Should -Not -Contain 'Squad Scribe'
+        @($script:Lead.Meta['agents']) | Should -Not -Contain 'Squad Deployer'
+    }
+
+    It 'the Workstream Lead can dispatch every tester alternate, QA, and the producing roles the Implementation Gate names' {
+        $catalog = Get-SquadReferenceBody -Name 'roster-catalog.md'
+        $testerRow = @($catalog -split "`n" | Where-Object { $_ -match '^\| tester ' -and $_ -match 'Code Review Walkback' })[0]
+        $alternates = @((($testerRow -split '\|') | Where-Object { $_ -match 'Code Review Functional' })[0].Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+        $alternates.Count | Should -BeGreaterOrEqual 7
+        $leadAgents = @($script:Lead.Meta['agents'])
+        foreach ($name in $alternates + @('QA', 'Codebase Profiler', 'Meeting Analyst', 'UX UI Designer', 'Functional Planner', 'PRD Builder', 'BRD Builder', 'Experiment Designer', 'PowerPoint Subagent', 'Squad Technical Writer', 'Squad Data Scientist')) { $leadAgents | Should -Contain $name }
+    }
+
+    It 'the Workstream Lead forwards briefs verbatim, sends one final message, writes no squad state, and never works inline' {
+        $script:Lead.Body | Should -Match ([regex]::Escape('Forward each owner''s brief to that owner VERBATIM.'))
+        $script:Lead.Body | Should -Match ([regex]::Escape('your single final message is the report'))
+        $script:Lead.Body | Should -Match ([regex]::Escape('Never write squad state: no `history/`, `decisions.md`, `state.json`, `consumption.md`, `team.md`, or Scribe file, and never run `Write-SquadHandoff.ps1` or dispatch the Squad Scribe.'))
+        $script:Lead.Body | Should -Match ([regex]::Escape('Never do role work inline.'))
+        $script:Lead.Body | Should -Match ([regex]::Escape('Never perform an impactful action'))
+        $script:Lead.Body | Should -Match ([regex]::Escape('Apply the *Owner Finish Barrier*'))
+        @(Find-InlineWorkPermission -Text $script:Lead.Body) | Should -BeNullOrEmpty
+    }
+
+    It 'the coordinator lists the lead, holds read_agent, and points at the procedure in one line' {
+        @($script:Coordinator.Meta['agents']) | Should -Contain 'Squad Workstream Lead'
+        @($script:Coordinator.Meta['tools']) | Should -Contain 'read_agent'
+        $script:Coordinator.Body | Should -Match ([regex]::Escape('*Background Workstreams Procedure*, `references/gates-and-modes.md`'))
+        $script:Coordinator.Body.Length | Should -BeLessOrEqual 30000
+    }
+
+    It 'the procedure takes one approval, launches in background in one block under the cap, and stays interactive-only' {
+        $script:BgText | Should -Match ([regex]::Escape('Present ONE confirmation listing every workstream'))
+        $script:BgText | Should -Match ([regex]::Escape('`mode: "background"`, all in ONE tool-call block'))
+        $script:BgText | Should -Match ([regex]::Escape('`COPILOT_SUBAGENT_MAX_CONCURRENT`'))
+        $script:BgText | Should -Match ([regex]::Escape('else 4'))
+        $script:BgText | Should -Match ([regex]::Escape('read it through a shell when one is available'))
+        $script:BgText | Should -Match ([regex]::Escape('16 for business and 32 for enterprise'))
+        $script:BgText | Should -Match ([regex]::Escape('counts only the subagents you launch that run at once'))
+        $script:BgText | Should -Match ([regex]::Escape('never autonomous, autopilot, or Watch'))
+        $script:BgText | Should -Match ([regex]::Escape('an impactful action still stops'))
+        $script:BgText | Should -Match ([regex]::Escape('run the workstreams sequentially and say so'))
+        @(Find-InlineWorkPermission -Text $script:BgText) | Should -BeNullOrEmpty
+    }
+
+    It 'the procedure verifies artifacts before reporting and writes hand-offs one at a time as the single writer' {
+        $script:BgText | Should -Match ([regex]::Escape('read that lead with `read_agent`, then VERIFY before reporting'))
+        $script:BgText | Should -Match ([regex]::Escape('reported as not delivered, never as done'))
+        $script:BgText | Should -Match ([regex]::Escape('one at a time, never while another hand-off is in flight'))
+        $script:BgText | Should -Match ([regex]::Escape('advances `state.json` `turn` by one'))
+        $script:BgText | Should -Match ([regex]::Escape('Stamp `timestamp` with the current UTC time when writing the hand-off, never the lead''s completion time'))
+    }
+
+    It 'the procedure runs coordinator-only gates in the foreground and backgrounds only bounded or planned workstreams' {
+        $script:BgText | Should -Match ([regex]::Escape('Run every coordinator-only gate in the foreground before any launch: discovery, intake, council, Cost Preflight, the Risk Gate, and routing tiers'))
+        $script:BgText | Should -Match ([regex]::Escape('qualifies for the *Bounded Lane*, or when it already has a confirmed plan artifact on disk'))
+        $script:BgText | Should -Match ([regex]::Escape('presents the plan in a second approval before any implementation'))
+        $script:BgText | Should -Match ([regex]::Escape('covers bounded and planned workstreams only'))
+        $script:BgText | Should -Match ([regex]::Escape('each owner''s routing tier'))
+        $script:BgText | Should -Match ([regex]::Escape('An `escalate`-tier owner, or a Risk Gate or Impactful-Action Gate trigger, keeps that workstream in the foreground'))
+    }
+
+    It 'the procedure requires every owner and an independent named reviewer in the lead''s agents list, else the foreground' {
+        $script:BgText | Should -Match ([regex]::Escape('Every owner and the reviewer of a lead workstream must be in the lead''s `agents:` list'))
+        $script:BgText | Should -Match ([regex]::Escape('Resolve the reviewer (the `tester` role) through its Selection Cue before launch and name it in the lead''s brief; it must differ from every owner agent'))
+        $script:BgText | Should -Match ([regex]::Escape('run that workstream in the foreground'))
+        $script:BgText | Should -Match ([regex]::Escape('read the verdict from that artifact on disk, never from the reviewer''s or the lead''s message'))
+        $script:Lead.Body | Should -Match ([regex]::Escape('by the reviewer agent the coordinator named in your brief'))
+    }
+
+    It 'the procedure treats a failed lead as not delivered and routes a mid-run file-writing request to a new workstream or a wait' {
+        $script:BgText | Should -Match ([regex]::Escape('A lead that errors, returns blocked, or reports nothing leaves its workstream not delivered: list its partial deliverables to the user and record none of them as done'))
+        $script:BgText | Should -Match ([regex]::Escape('becomes a new workstream under these rules, with its own approval, or waits when its write set overlaps a running workstream'))
+    }
+
+    It 'a bounded workstream needs no lead: the coordinator dispatches owners and the named reviewer directly, and a lead is for multi-stage workstreams only' {
+        $script:BgText | Should -Match ([regex]::Escape('A bounded workstream needs no lead: the coordinator dispatches its owner and reviewer directly'))
+        $script:BgText | Should -Match ([regex]::Escape('Use a `Squad Workstream Lead` only for a multi-stage workstream'))
+        $script:BgText | Should -Match ([regex]::Escape('Start each bounded workstream as direct `task` dispatches to its owner(s) with `mode: "background"`'))
+        $script:BgText | Should -Match ([regex]::Escape('the owner''s bounded pick as `model` per *Bounded Lane*'))
+        $script:BgText | Should -Match ([regex]::Escape('an owner at depth 1 keeps its own tools and nests nothing'))
+        $script:BgText | Should -Match ([regex]::Escape('launch its named reviewer yourself as a background `task` (a review-class dispatch, never a bounded pick'))
+        $script:BgText | Should -Match ([regex]::Escape('a direct workstream holds one slot at a time'))
+        $script:Coordinator.Body | Should -Match ([regex]::Escape('a `Squad Workstream Lead` only for multi-stage ones: *Background Workstreams Procedure*'))
+    }
+
+    It 'the lead is pinned, its own turns are recorded once as orchestration.leadConsumption, and the handoff script accepts it' {
+        $script:BgText | Should -Match ([regex]::Escape('The lead is pinned `Claude Sonnet 5 (copilot)` (the Squad Lead''s pin) and has no `tools:` list'))
+        $script:BgText | Should -Match ([regex]::Escape('`orchestration.leadConsumption`'))
+        $script:BgText | Should -Match ([regex]::Escape('`model_source` `agent-pinned`'))
+        $script:BgText | Should -Match ([regex]::Escape('and the ledger sums it once'))
+        $script:Lead.Body | Should -Match ([regex]::Escape('`orchestration.leadConsumption`'))
+        (Get-Content -LiteralPath (Join-Path $script:Model.SquadSkillRoot 'scripts/Write-SquadHandoff.ps1') -Raw) | Should -Match ([regex]::Escape("'leadConsumption'"))
+    }
+
+    It 'a missing currentRun.costPreflight needs no write and no Scribe dispatch, and the ledger append replaces the Scribe Cost Comparison note' {
+        $script:Gates | Should -Match ([regex]::Escape('or `currentRun.costPreflight` is absent (it reads as `not-requested` per `entry-schemas.md`, so no write and no Scribe dispatch is needed)'))
+        (Get-SquadReferenceBody -Name 'consumption.md') | Should -Match ([regex]::Escape('write nothing and dispatch no Scribe for it'))
+        (Get-SquadReferenceBody -Name 'consumption.md') | Should -Match ([regex]::Escape('appends the template''s `## Cost Comparison (illustrative)` section'))
+        (Get-Content -LiteralPath (Join-Path $script:Model.SquadSkillRoot 'scripts/Write-SquadHandoff.ps1') -Raw) | Should -Not -Match 'the Squad Scribe writes it'
+    }
+
+    It '`delivery=background` never overrides disjoint write sets, a workstream hand-off carries one record per stage, and the hint declares it' {
+        $script:BgText | Should -Match ([regex]::Escape('`delivery=background` still requires disjoint write sets and never overrides them'))
+        $script:Parallelism | Should -Match ([regex]::Escape('carries one `historyRecords` entry per stage'))
+        $script:Coordinator.Body | Should -Match ([regex]::Escape('`delivery=background`'))
+        @($script:Model.Prompts | Where-Object Name -eq 'squad.prompt.md')[0].Meta['argument-hint'] | Should -Match ([regex]::Escape('[delivery=background]'))
+    }
+
+    It 'the Scribe payload template carries workstream and launchedAt for the fallback hand-off' {
+        $template = Get-SquadReferenceBody -Name 'scribe-payload-template.md'
+        $template | Should -Match ([regex]::Escape('workstream: <id; Scribe writes * Workstream: line>'))
+        $template | Should -Match ([regex]::Escape('launchedAt: <ISO, with workstream>'))
+        $script:BgText | Should -Match ([regex]::Escape('which records the same `workstream` and `launchedAt` as a `* Workstream:` line'))
+    }
+}
+
+Describe 'Dispatch brief replaces discovery turns' {
+    BeforeAll {
+        $script:BriefScript = Join-Path $PackageRoot '.agents/skills/squad/scripts/Get-SquadDispatchBrief.ps1'
+    }
+    It 'the coordinator runs the brief first and reads the references only when the brief does not cover the request' {
+        $script:Coordinator.Body | Should -Match ([regex]::Escape('run `scripts/Get-SquadDispatchBrief.ps1 -SquadRoot <root> -SessionModel <id>`'))
+        $script:Coordinator.Body | Should -Match ([regex]::Escape('When its `coverage:` line covers the request, it replaces every read below, agent files, and the rate table.'))
+        $script:Coordinator.Body | Should -Match ([regex]::Escape('read exactly these files whole (`view` `forceReadLargeFiles: true`)'))
+        $script:Coordinator.Body.Length | Should -BeLessOrEqual 30000
+    }
+
+    It 'the script ships with the skill' {
+        Test-Path -LiteralPath $script:BriefScript | Should -BeTrue
     }
 }

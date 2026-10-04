@@ -46,13 +46,13 @@ BeforeAll {
         .SYNOPSIS
             Writes a squad root whose state.json mirrors the Scribe seed, optionally in legacy form.
         #>
-        param([ValidateSet('current', 'legacy', 'federation-legacy')][string]$Kind = 'current')
+        param([ValidateSet('current', 'legacy', 'federation-legacy', 'current-missing')][string]$Kind = 'current')
         $root = Join-Path $TestDrive "squad-$([guid]::NewGuid().ToString('N').Substring(0, 8))"
         New-Item -ItemType Directory -Path $root -Force | Out-Null
         $preflight = '"costPreflight": {"runId":"","roundId":"","ceilingUsd":null,"evaluatedSpendUsd":0,"remainingUsd":null,"plannedDispatches":0,"projectedCostUsd":0,"reserveMultiplier":3.0,"admissionCostUsd":0,"confidence":"not-applicable","basis":"not-requested","decision":"not-requested","reason":"No cost ceiling configured."}'
         $runBody = '"sessionModel": "claude-sonnet-5.5", "modelOverrides": {"developer": "gpt-5.6-sol"}, "estCostUsd": 1.5, "estCreditsTotal": 150'
-        if ($Kind -ne 'current') { $currentRun = '{' + $runBody + '}' } else { $currentRun = '{' + $runBody + ', ' + $preflight + '}' }
-        $schema = switch ($Kind) { 'current' { '1.4' } 'legacy' { '1.3' } default { '1.2' } }
+        if ($Kind -notin 'current') { $currentRun = '{' + $runBody + '}' } else { $currentRun = '{' + $runBody + ', ' + $preflight + '}' }
+        $schema = switch ($Kind) { 'current' { '1.4' } 'current-missing' { '1.4' } 'legacy' { '1.3' } default { '1.2' } }
         $roleKey = if ($Kind -eq 'federation-legacy') { '"subSquads": ["a"], "activeSubSquads": [], ' } else { '"activeRoles": ["researcher"], ' }
         $json = '{"schemaVersion": "' + $schema + '", "updated": "2026-10-03T18:00:00Z", "turn": 4, "mode": "interactive", ' + $roleKey + '"openEscalations": [], "currentRun": ' + $currentRun + ', "trigger": {"ref": "o/r#1"}, "notify": {"approvalChannel": "in-chat", "enabled": false, "email": "", "github": {"handle": "", "repo": ""}}}'
         $pretty = $json | ConvertFrom-Json | ConvertTo-Json -Depth 20
@@ -161,6 +161,26 @@ Describe 'Set-SquadCostPreflight.ps1 writes the transaction' {
         $result.ExitCode | Should -Be 0 -Because $result.Output
         $result.Output | Should -Match 'UNCHANGED'
         Assert-Untouched -Root $root -Before $before
+    }
+
+    It 'a 1.4 state lacking currentRun.costPreflight accepts a ceiling write and adds the object without a schema change' {
+        $root = New-SquadFixture -Kind current-missing
+        $result = Invoke-Preflight -Arguments @('-SquadRoot', $root, '-ExpectedUpdated', '2026-10-03T18:00:00Z', '-PreflightJson', (New-PreflightJson), '-DecisionText', (New-DecisionText))
+        $result.ExitCode | Should -Be 0 -Because $result.Output
+        $state = Read-State -Root $root
+        $state.schemaVersion | Should -Be '1.4'
+        $state.currentRun.costPreflight.decision | Should -Be 'within-ceiling'
+        $state.currentRun.estCostUsd | Should -Be 1.5
+        ([regex]::Matches([System.IO.File]::ReadAllText((Join-Path $root 'decisions.md')), '(?m)^## Cost Preflight ')).Count | Should -Be 1
+    }
+
+    It 'a 1.4 state lacking currentRun.costPreflight accepts a not-requested write' {
+        $root = New-SquadFixture -Kind current-missing
+        $result = Invoke-Preflight -Arguments @('-SquadRoot', $root, '-ExpectedUpdated', '2026-10-03T18:00:00Z', '-PreflightJson', (New-PreflightJson -Decision 'not-requested'))
+        $result.ExitCode | Should -Be 0 -Because $result.Output
+        $state = Read-State -Root $root
+        $state.schemaVersion | Should -Be '1.4'
+        $state.currentRun.costPreflight.decision | Should -Be 'not-requested'
     }
 
     It 'a second round appends a second entry and the first stays byte-identical' {

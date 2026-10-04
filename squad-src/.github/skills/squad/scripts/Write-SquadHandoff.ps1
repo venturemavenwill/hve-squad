@@ -46,6 +46,11 @@
 
     Payload (JSON object; every object is a closed key set):
       runId, turn, mode, timestamp, route (optional, requires decision),
+      workstream (optional id of a background workstream; recorded as a * Workstream: bullet in every
+        entry it writes; each workstream hand-off still advances state turn by one) with launchedAt
+        (required with it: the launch time, no earlier than the latest ordinary hand-off) and since
+        (required with it, no earlier than launchedAt). A workstream hand-off must include a review-class
+        record, and refuses a deliverable already credited in history and not modified since,
       decision {title, rationale, adrNoted} (optional),
       historyRecords [ {agent, title?, request, deliverable, outcome, memberName?,
         selectionCue? (required for an Alternate agent), passedModel? (required with
@@ -53,7 +58,9 @@
         a ceiling slot needs the Scribe), consumption{ten fields; priced_as may be omitted and
         is derived: the model's own rate row, else its tier fallback row}, routingIdentity?{
         requestedModel, effectiveModel, observedModel, routeRationale}} ] (may be empty),
-      orchestration {request?, outcome?, passedModel?, consumption{ten fields}},
+      orchestration {request?, outcome?, passedModel?, consumption{ten fields},
+        leadConsumption? (workstream only: a Squad Workstream Lead's own turns, ten fields,
+        model_source agent-pinned and equal to the lead's pin; written as a second orchestration block)},
       stateAdvance {activeRoles[], openEscalationsRaised[]?, openEscalationsResolved[]?,
         sessionModel?, modelOverrides?}.
 
@@ -551,13 +558,27 @@ function Test-Attribution {
     }
 }
 
+# A stamp later than now + 120 s cannot be real (typically local time labelled Z); it is never an ordering floor.
+$handoffWarnings = [System.Collections.Generic.List[string]]::new()
+$futureLimit = [DateTimeOffset]::UtcNow.AddSeconds(120)
+function Test-FutureStamp {
+    param([string]$Value, [DateTimeOffset]$Time, [string]$Where)
+    if ($Time -le $futureLimit) { return $false }
+    $warning = "WARN future timestamp $Value in $Where ignored as an ordering floor (likely local time labelled UTC)"
+    if (-not $handoffWarnings.Contains($warning)) { $handoffWarnings.Add($warning) }
+    return $true
+}
+
 function Get-LastEntryTimestamp {
-    param([string]$Text, [string]$HeadingPrefix)
+    param([string]$Text, [string]$HeadingPrefix, [string]$Where = '')
     if ($null -eq $Text) { return $null }
     $found = [regex]::Matches($Text, '(?m)^' + $HeadingPrefix + '[ \t]+(\d{4}-\d{2}-\d{2}T\S+)')
     for ($i = $found.Count - 1; $i -ge 0; $i--) {
         $parsed = [DateTimeOffset]::MinValue
-        if ([DateTimeOffset]::TryParse($found[$i].Groups[1].Value, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::None, [ref]$parsed)) { return $parsed }
+        if ([DateTimeOffset]::TryParse($found[$i].Groups[1].Value, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::None, [ref]$parsed)) {
+            if (Test-FutureStamp $found[$i].Groups[1].Value $parsed $Where) { continue }
+            return $parsed
+        }
     }
     return $null
 }
@@ -621,7 +642,7 @@ if ($RateNames.Count -eq 0) { Stop-Handoff 2 'no rate table can be read (consump
 
 # --- Payload validation ------------------------------------------------------------------------
 Test-NodeStrings -Node $payload -Where 'payload'
-$null = Test-ObjectKeys -Node $payload -Required @('runId', 'turn', 'mode', 'timestamp', 'historyRecords', 'orchestration', 'stateAdvance') -Optional @('route', 'decision', 'since') -Where 'payload'
+$null = Test-ObjectKeys -Node $payload -Required @('runId', 'turn', 'mode', 'timestamp', 'historyRecords', 'orchestration', 'stateAdvance') -Optional @('route', 'decision', 'since', 'workstream', 'launchedAt') -Where 'payload'
 if ($problems.Count -gt 0) { Stop-Handoff 1 ("invalid payload: " + ($problems -join ' ')) }
 
 $runId = Get-NodeString $payload['runId']
@@ -637,6 +658,21 @@ if ($null -ne $payload['since']) {
     $since = Get-NodeString $payload['since']
     if ($null -eq $since -or $since -notmatch '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$') { $problems.Add('payload.since must be ISO 8601 (when this turn''s dispatch began).'); $since = $null }
 }
+$workstream = $null
+if ($null -ne $payload['workstream']) {
+    $workstream = Get-NodeString $payload['workstream']
+    if ($null -eq $workstream -or $workstream -notmatch '^[A-Za-z0-9._:-]+$') { $problems.Add('payload.workstream must match [A-Za-z0-9._:-]+ (the background workstream id).'); $workstream = $null }
+}
+$launchedAt = $null
+if ($null -ne $payload['launchedAt']) {
+    $launchedAt = Get-NodeString $payload['launchedAt']
+    if ($null -eq $launchedAt -or $launchedAt -notmatch '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$') { $problems.Add('payload.launchedAt must be ISO 8601 (when the workstream was launched).'); $launchedAt = $null }
+}
+if ($null -ne $payload['workstream']) {
+    if ($null -eq $payload['launchedAt']) { $problems.Add('payload.launchedAt (the workstream launch time) is required with payload.workstream.') }
+    if ($null -eq $payload['since']) { $problems.Add('payload.since (no earlier than launchedAt) is required with payload.workstream.') }
+}
+elseif ($null -ne $payload['launchedAt']) { $problems.Add('payload.launchedAt is only valid with payload.workstream.') }
 $route = $null
 if ($null -ne $payload['route']) {
     $route = Get-TextField -Node $payload -Key 'route' -Where 'payload'
@@ -748,7 +784,7 @@ else {
 }
 
 $orchestration = $null
-if (Test-ObjectKeys -Node $payload['orchestration'] -Required @('consumption') -Optional @('request', 'outcome', 'passedModel') -Where 'orchestration') {
+if (Test-ObjectKeys -Node $payload['orchestration'] -Required @('consumption') -Optional @('request', 'outcome', 'passedModel', 'leadConsumption') -Where 'orchestration') {
     $orchConsumption = Test-Consumption -Node $payload['orchestration']['consumption'] -Where 'orchestration.consumption'
     $orchRequest = Get-TextField -Node $payload['orchestration'] -Key 'request' -Where 'orchestration' -Optional
     $orchOutcome = Get-TextField -Node $payload['orchestration'] -Key 'outcome' -Where 'orchestration' -Optional
@@ -757,7 +793,19 @@ if (Test-ObjectKeys -Node $payload['orchestration'] -Required @('consumption') -
         # The orchestration entry is the coordinator's own turns, priced at the session model; the coordinator declares no model: pin.
         if ($orchConsumption['model_source'] -eq 'agent-pinned') { $problems.Add('orchestration.consumption.model_source must not be agent-pinned; the coordinator declares no model: pin. Price its turns at the session model with session-inherited.') }
         else { Test-Attribution -Map $orchConsumption -Where 'orchestration.consumption' -PinAgent $ScribeAgent -PassedModel $orchPassed }
-        $orchestration = @{ Consumption = $orchConsumption; Request = $orchRequest; Outcome = $orchOutcome }
+        $orchestration = @{ Consumption = $orchConsumption; Request = $orchRequest; Outcome = $orchOutcome; LeadConsumption = $null }
+        # A Squad Workstream Lead's own turns: a second orchestration block, agent-pinned to the lead's frontmatter pin; workstream hand-offs only.
+        if ($null -ne $payload['orchestration']['leadConsumption']) {
+            if (-not $workstream) { $problems.Add('orchestration.leadConsumption is only valid with payload.workstream.') }
+            else {
+                $leadConsumption = Test-Consumption -Node $payload['orchestration']['leadConsumption'] -Where 'orchestration.leadConsumption'
+                if ($null -ne $leadConsumption) {
+                    if ($leadConsumption['model_source'] -ne 'agent-pinned') { $problems.Add('orchestration.leadConsumption.model_source must be agent-pinned; the Squad Workstream Lead declares a model: pin.') }
+                    else { Test-Attribution -Map $leadConsumption -Where 'orchestration.leadConsumption' -PinAgent 'Squad Workstream Lead' -PassedModel $null }
+                    $orchestration['LeadConsumption'] = $leadConsumption
+                }
+            }
+        }
     }
 }
 
@@ -836,7 +884,11 @@ if ($problems.Count -gt 0) { Stop-Handoff 1 ("invalid payload: " + ($problems -j
 $payloadTime = [DateTimeOffset]::Parse($timestamp, [System.Globalization.CultureInfo]::InvariantCulture)
 $lastHandoff = [DateTimeOffset]::MinValue
 $stateUpdated = Get-NodeString $state['updated']
-if ($stateUpdated -and [DateTimeOffset]::TryParse($stateUpdated, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::None, [ref]$lastHandoff)) {
+if ($payloadTime -gt $futureLimit -or ($since -and [DateTimeOffset]::Parse($since, [System.Globalization.CultureInfo]::InvariantCulture) -gt $futureLimit) -or ($launchedAt -and [DateTimeOffset]::Parse($launchedAt, [System.Globalization.CultureInfo]::InvariantCulture) -gt $futureLimit)) {
+    Stop-Handoff 1 'timestamp is in the future; stamp with the current UTC time (payload.timestamp, launchedAt and since may not be more than 120 s ahead of now).'
+}
+if ($stateUpdated -and [DateTimeOffset]::TryParse($stateUpdated, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::None, [ref]$lastHandoff) -and (Test-FutureStamp $stateUpdated $lastHandoff 'state.json')) { $lastHandoff = [DateTimeOffset]::MinValue }
+if ($lastHandoff -gt [DateTimeOffset]::MinValue) {
     if ($payloadTime -lt $lastHandoff) { Stop-Handoff 1 "payload.timestamp $timestamp precedes state.json updated $stateUpdated; entries stay in chronological order." }
 }
 
@@ -845,8 +897,35 @@ if ($stateUpdated -and [DateTimeOffset]::TryParse($stateUpdated, [System.Globali
 $freshAfter = if ($since) { [DateTimeOffset]::Parse($since, [System.Globalization.CultureInfo]::InvariantCulture) } else { $lastHandoff }
 if ($since) {
     # since is bounded to this turn: not before the previous hand-off (state.json updated), not after this one.
-    if ($freshAfter -lt $lastHandoff) { $problems.Add("payload.since $since precedes state.json updated $stateUpdated; since must fall within this turn.") }
+    # A workstream is bounded by its launch instead: its since may precede an earlier workstream's hand-off, never its launchedAt.
+    if (-not $workstream -and $freshAfter -lt $lastHandoff) { $problems.Add("payload.since $since precedes state.json updated $stateUpdated; since must fall within this turn.") }
     if ($freshAfter -gt $payloadTime) { $problems.Add("payload.since $since is after payload.timestamp $timestamp.") }
+}
+$credited = @()
+if ($workstream) {
+    $launchTime = if ($launchedAt) { [DateTimeOffset]::Parse($launchedAt, [System.Globalization.CultureInfo]::InvariantCulture) } else { $null }
+    if ($launchTime -and $freshAfter -lt $launchTime) { $problems.Add("payload.since $since precedes payload.launchedAt $launchedAt; a workstream's deliverables must postdate its launch.") }
+    if ($launchTime -and $launchTime -gt $payloadTime) { $problems.Add("payload.launchedAt $launchedAt is after payload.timestamp $timestamp.") }
+    # The launch follows the latest ordinary (non-workstream) hand-off; with no entries at all it follows state.json updated.
+    $ordinaryLatest = $null
+    $anyEntries = $false
+    foreach ($historyFile in @(Get-ChildItem -LiteralPath $historyDir -Filter '*.md' -File -ErrorAction SilentlyContinue)) {
+        $historyText = [System.Text.UTF8Encoding]::new($false).GetString([System.IO.File]::ReadAllBytes($historyFile.FullName))
+        foreach ($chunk in ([regex]::Split($historyText, '(?m)^(?=###[ \t]+\d{4}-)') | Where-Object { $_ -match '^###[ \t]+\d{4}-' })) {
+            $entryTime = [DateTimeOffset]::MinValue
+            if (-not [DateTimeOffset]::TryParse(([regex]::Match($chunk, '^###[ \t]+(\S+)').Groups[1].Value), [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::None, [ref]$entryTime)) { continue }
+            $futureEntry = Test-FutureStamp ([regex]::Match($chunk, '^###[ \t]+(\S+)').Groups[1].Value) $entryTime "history/$($historyFile.Name)"
+            $anyEntries = $true
+            if (-not $futureEntry -and $chunk -notmatch '(?m)^\* Workstream:' -and $historyFile.BaseName -eq $ScribeAgent -and ($null -eq $ordinaryLatest -or $entryTime -gt $ordinaryLatest)) { $ordinaryLatest = $entryTime }
+            foreach ($deliverableLineMatch in [regex]::Matches($chunk, '(?m)^\* Deliverable:(.*)$')) {
+                foreach ($pathMatch in [regex]::Matches($deliverableLineMatch.Groups[1].Value, '`([^`]+)`')) {
+                    $credited += , @{ Path = (($pathMatch.Groups[1].Value -replace '\\', '/').Trim() -replace '^\./', '').ToLowerInvariant(); Time = $entryTime; File = $historyFile.Name }
+                }
+            }
+        }
+    }
+    $launchFloor = if ($null -ne $ordinaryLatest) { $ordinaryLatest } elseif (-not $anyEntries -and $lastHandoff -gt [DateTimeOffset]::MinValue) { $lastHandoff } else { $null }
+    if ($launchTime -and $launchFloor -and $launchTime -lt $launchFloor) { $problems.Add("payload.launchedAt $launchedAt precedes the hand-off that preceded the launch ($launchFloor); a workstream launches after the latest ordinary hand-off.") }
 }
 $deliverableBase = if ($RepoBase) { $RepoBase } else { ConvertTo-NormalPath $SquadRoot }
 foreach ($record in $records) {
@@ -865,8 +944,15 @@ foreach ($record in $records) {
     $modified = [DateTimeOffset]::new([System.IO.File]::GetLastWriteTimeUtc($resolved), [TimeSpan]::Zero)
     $record.Modified = $modified
     $record.ResolvedPath = $resolved
+    # A workstream may not re-claim an artifact an earlier entry already credited and nothing has rewritten since.
+    $recordKey = (($record.DeliverablePath -replace '\\', '/').Trim() -replace '^\./', '').ToLowerInvariant()
+    foreach ($earlier in @($credited | Where-Object { $_.Path -eq $recordKey -and $_.Time.AddSeconds(5) -ge $modified })) {
+        $problems.Add("deliverable '$($record.DeliverablePath)' for $($record.Agent) was already credited in history/$($earlier.File) at $($earlier.Time.ToString('o')) and not modified since; a workstream may not claim another entry's artifact.")
+        break
+    }
     if ($payloadTime -lt $modified.AddSeconds(-5)) { $problems.Add("payload.timestamp $timestamp precedes the last write of deliverable '$($record.DeliverablePath)' for $($record.Agent) ($($modified.ToString('o'))); stamp the hand-off at or after its artifacts.") }
 }
+if ($workstream -and @($records | Where-Object { $agentRoles[$_.Agent] -in $ReviewRoles }).Count -eq 0) { $problems.Add('a workstream hand-off needs at least one review-class record (the closing review) whose deliverable is the review artifact.') }
 if ($problems.Count -gt 0) { Stop-Handoff 1 ("invalid payload: " + ($problems -join ' ')) }
 
 # Review-saw-final-files: no owner deliverable may change after the closing review's own deliverable.
@@ -881,7 +967,6 @@ if ($reviewRecords.Count -gt 0) {
 }
 
 # A closing review on a bounded route that ran on a model other than its pin is recorded, not refused.
-$handoffWarnings = [System.Collections.Generic.List[string]]::new()
 if ($route -match '(?i)\bbounded\b' -and $decision) {
     foreach ($record in @($records | Where-Object { $agentRoles[$_.Agent] -in $ReviewRoles -and $_.Consumption['model_source'] -eq 'cli-pinned' })) {
         $pin = Find-AgentPin $record.Agent
@@ -1010,6 +1095,7 @@ foreach ($record in $records) {
     $lines = [System.Collections.Generic.List[string]]::new()
     $lines.Add("### $heading"); $lines.Add('')
     $lines.Add("* Turn: $turn")
+    if ($workstream) { $lines.Add("* Workstream: $workstream") }
     $lines.Add("* Request: $($record.Request)")
     $deliverableLine = '`' + $record.DeliverablePath + '`'
     if ($record.DeliverableSize) { $deliverableLine += " ($($record.DeliverableSize))" }
@@ -1037,6 +1123,7 @@ if ($decision) {
     $decisionLines = [System.Collections.Generic.List[string]]::new()
     $decisionLines.Add("## $decisionHeading"); $decisionLines.Add('')
     $decisionLines.Add("* Turn: $turn")
+    if ($workstream) { $decisionLines.Add("* Workstream: $workstream") }
     if ($route) { $decisionLines.Add("* Route: $route") }
     if ($decision.Rationale.Contains("`n")) {
         $decisionLines.Add('* Rationale:'); $decisionLines.Add('')
@@ -1054,11 +1141,16 @@ $orchHeading = "$timestamp Coordinator hand-off, turn $turn"
 $orchLines = [System.Collections.Generic.List[string]]::new()
 $orchLines.Add("### $orchHeading"); $orchLines.Add('')
 $orchLines.Add("* Turn: $turn")
+if ($workstream) { $orchLines.Add("* Workstream: $workstream") }
 $orchLines.Add("* Request: $(if ($orchestration.Request) { $orchestration.Request } else { 'Coordinator hand-off written by scripts/Write-SquadHandoff.ps1 with no Scribe in flight.' })")
 $orchLines.Add("* Deliverable: $($deliverableList -join ', ')")
 $orchLines.Add("* Outcome: $(if ($orchestration.Outcome) { $orchestration.Outcome } else { "Recorded $($entryPlans.Count) dispatch entr$(if ($entryPlans.Count -eq 1) { 'y' } else { 'ies' }) and advanced state." })")
 $orchLines.Add('')
 foreach ($l in (ConvertTo-ConsumptionBlock -Map $orchestration.Consumption -Orchestration $true)) { $orchLines.Add($l) }
+if ($orchestration.LeadConsumption) {
+    $orchLines.Add('')
+    foreach ($l in (ConvertTo-ConsumptionBlock -Map $orchestration.LeadConsumption -Orchestration $true)) { $orchLines.Add($l) }
+}
 
 # Replay guard and pre-write counts.
 $historyTargets = [ordered]@{}
@@ -1069,7 +1161,7 @@ foreach ($agent in $historyTargets.Keys) {
     try { $existing = Get-FileText (Join-Path $historyDir "$agent.md") }
     catch { Stop-Handoff 3 "cannot read history/$agent.md ($($_.Exception.Message)); nothing was changed." }
     $expectedCounts[$agent] = (Get-EntryCount $existing) + $historyTargets[$agent].Count
-    $lastEntry = Get-LastEntryTimestamp -Text $existing -HeadingPrefix '###'
+    $lastEntry = Get-LastEntryTimestamp -Text $existing -HeadingPrefix '###' -Where "history/$agent.md"
     if ($null -ne $lastEntry -and $payloadTime -lt $lastEntry) { Stop-Handoff 1 "payload.timestamp $timestamp precedes the last entry in history/$agent.md ($lastEntry); entries stay in chronological order." }
     foreach ($plan in $historyTargets[$agent]) {
         if ($null -ne $existing -and [regex]::IsMatch($existing, '(?m)^###[ \t]+' + [regex]::Escape($plan.Heading) + '[ \t]*\r?$')) {
@@ -1080,7 +1172,7 @@ foreach ($agent in $historyTargets.Keys) {
 if ($decisionHeading) {
     try { $existingDecisions = Get-FileText $decisionsPath }
     catch { Stop-Handoff 3 "cannot read decisions.md ($($_.Exception.Message)); nothing was changed." }
-    $lastDecision = Get-LastEntryTimestamp -Text $existingDecisions -HeadingPrefix '##'
+    $lastDecision = Get-LastEntryTimestamp -Text $existingDecisions -HeadingPrefix '##' -Where 'decisions.md'
     if ($null -ne $lastDecision -and $payloadTime -lt $lastDecision) { Stop-Handoff 1 "payload.timestamp $timestamp precedes the last entry in decisions.md ($lastDecision); entries stay in chronological order." }
     if ([regex]::IsMatch($existingDecisions, '(?m)^## ' + [regex]::Escape($decisionHeading) + '[ \t]*\r?$')) { Stop-Handoff 1 "decisions.md already holds '## $decisionHeading'; a replayed payload writes nothing." }
 }
@@ -1198,10 +1290,20 @@ try {
         }
         elseif ($fullMatch.Success) { $comparisonRefreshed = $true }
     }
+    if (-not $comparisonRefreshed) {
+        # No Cost Comparison section at all: append the template's section with this script's own squad-figure line.
+        $templateForComparison = [System.IO.File]::ReadAllText((Join-Path $scriptsRoot '../references/consumption.md'))
+        $estimatesNote = [regex]::Match($templateForComparison, '(?m)^> Estimates only\.[^\r\n]*').Value
+        $nl = Get-NewlineOf $ledgerText
+        $section = "## Cost Comparison (illustrative)$nl$nl$comparison$nl"
+        if ($estimatesNote) { $section += "$nl$estimatesNote$nl" }
+        $ledgerText = $ledgerText.TrimEnd() + "$nl$nl" + $section
+        $comparisonRefreshed = $true
+        $written.Add('APPENDED Cost Comparison section to consumption.md')
+    }
     $ledgerOut = [System.Text.UTF8Encoding]::new($false).GetBytes($ledgerText)
     if ($ledgerHasBom) { $ledgerOut = [byte[]](@(0xEF, 0xBB, 0xBF) + $ledgerOut) }
     Write-FileAtomic -FullPath $consumptionPath -Bytes $ledgerOut
-    if (-not $comparisonRefreshed) { $written.Add('NOTE Cost Comparison has no recognizable paragraph; the Squad Scribe writes it.') }
 
     $countsArgument = (@($expectedCounts.Keys | ForEach-Object { "$_=$($expectedCounts[$_])" })) -join ';'
     $check = Invoke-ChildScript -ScriptPath $ledgerScript -Arguments @('-SquadRoot', $SquadRoot, '-Check', '-ExpectedHistoryCounts', $countsArgument)

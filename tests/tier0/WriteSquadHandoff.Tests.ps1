@@ -777,6 +777,29 @@ Describe 'Write-SquadHandoff.ps1 refuses what it cannot admit or verify' {
         Get-TreeHash $root | Should -Be $before
     }
 
+    It 'ignores a future state.json updated as an ordering floor, warns, and still writes' {
+        $root = New-Root
+        $statePath = Join-Path $root 'state.json'
+        $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+        $future = [DateTime]::UtcNow.AddHours(2).ToString('yyyy-MM-ddTHH:mm:ssZ')
+        $state.updated = $future
+        Set-Content -LiteralPath $statePath -Value ($state | ConvertTo-Json -Depth 20) -Encoding utf8NoBOM
+        $result = Invoke-Writer -Root $root -Payload (New-Payload)
+        $result.ExitCode | Should -Be 0 -Because $result.Output
+        $result.Output | Should -Match ([regex]::Escape("WARN future timestamp $future in state.json ignored as an ordering floor (likely local time labelled UTC)"))
+    }
+
+    It 'refuses a payload timestamp more than 120 s in the future' {
+        $root = New-Root
+        $payload = New-Payload
+        $payload.timestamp = [DateTime]::UtcNow.AddHours(2).ToString('yyyy-MM-ddTHH:mm:ssZ')
+        $before = Get-TreeHash $root
+        $result = Invoke-Writer -Root $root -Payload $payload
+        $result.ExitCode | Should -Be 1 -Because $result.Output
+        $result.Output | Should -Match 'timestamp is in the future; stamp with the current UTC time'
+        Get-TreeHash $root | Should -Be $before
+    }
+
     It 'checks attribution: agent pin, cli passed model, rate row, and Alternate cue; records Member Name' {
         $bad = [ordered]@{
             'agent-pinned mismatch'     = { param($p) $c = $p.historyRecords[0].consumption; $c.model_source = 'agent-pinned'; $c.model = 'Totally Made Up' }
@@ -961,5 +984,222 @@ Describe 'Write-SquadHandoff.ps1 refuses what it cannot admit or verify' {
         $output = & pwsh -NoProfile -File $wrapper *>&1 | Out-String
         $LASTEXITCODE | Should -Be 0 -Because $output
         (Get-Content -LiteralPath (Join-Path $root 'history/Squad Researcher.md') -Raw) | Should -Match ([regex]::Escape('Kept $x and $(Get-Date) and `code` literal.'))
+    }
+}
+
+Describe 'Write-SquadHandoff.ps1 records concurrent background workstreams (RTE-52)' {
+    BeforeAll {
+        function New-WsRoot {
+            # The fixture root plus a tester row (Squad Reviewer) and two research and two review artifacts, one pair per workstream.
+            $root = New-Root
+            $repo = (Resolve-Path (Join-Path $root '../..')).Path
+            $team = Join-Path $root 'team.md'
+            $text = (Get-Content -LiteralPath $team -Raw) -replace "`r`n", "`n"
+            $text = $text -replace '(?m)^(\| scribe .*)$', "`$1`n| tester     | Beta        | Squad Reviewer        | —                  | —              | runSubagent / task | fast       | reviews/           |"
+            [System.IO.File]::WriteAllText($team, $text, [System.Text.UTF8Encoding]::new($false))
+            Set-Content -LiteralPath (Join-Path $repo '.github/agents/squad/squad-reviewer.agent.md') -Value "---`nname: Squad Reviewer`nmodel: Claude Haiku 4.5 (copilot)`n---`n# Reviewer`n"
+            New-Item -ItemType Directory -Path (Join-Path $root 'reviews') -Force | Out-Null
+            $times = [ordered]@{ 'research/a.md' = '2026-09-27T09:30:00Z'; 'reviews/review-a.md' = '2026-09-27T09:40:00Z'; 'research/b.md' = '2026-09-27T09:31:00Z'; 'reviews/review-b.md' = '2026-09-27T09:41:00Z' }
+            foreach ($rel in $times.Keys) {
+                Set-Content -LiteralPath (Join-Path $root $rel) -Value $rel
+                (Get-Item -LiteralPath (Join-Path $root $rel)).LastWriteTimeUtc = [DateTime]::Parse($times[$rel]).ToUniversalTime()
+            }
+            $root
+        }
+
+        function New-WsPayload {
+            param([string]$Id, [int]$Turn, [string]$Timestamp, [string]$Research, [string]$Review, [string]$Launched = '2026-09-27T09:10:00Z', [string]$Since = '2026-09-27T09:20:00Z', [switch]$NoReview)
+            $payload = New-Payload
+            $payload.turn = $Turn
+            $payload.timestamp = $Timestamp
+            $payload.workstream = $Id
+            $payload.launchedAt = $Launched
+            $payload.since = $Since
+            $payload.historyRecords[0].deliverable = "$Research (~100 words)"
+            if (-not $NoReview) {
+                $reviewRecord = [ordered]@{ agent = 'Squad Reviewer'; request = 'Review the final files.'; deliverable = $Review; outcome = 'Approved.'
+                    consumption = [ordered]@{ model = 'Claude Haiku 4.5'; model_source = 'agent-pinned'; model_tier = 'fast'; internal_turns = 3; input_tokens = 1000; cached_tokens = 2000; cache_write_tokens = 500; output_tokens = 800; basis = 'estimated' } }
+                $payload.historyRecords = @($payload.historyRecords[0], $reviewRecord)
+            }
+            $payload
+        }
+    }
+
+    It 'writes two sequential workstream hand-offs, each advancing the turn, each with its own deliverables and a since that precedes the earlier hand-off' {
+        $root = New-WsRoot
+        $one = Invoke-Writer -Root $root -Payload (New-WsPayload -Id 'ws-a' -Turn 2 -Timestamp '2026-09-27T10:00:00Z' -Research 'research/a.md' -Review 'reviews/review-a.md')
+        $one.ExitCode | Should -Be 0 -Because $one.Output
+
+        $two = Invoke-Writer -Root $root -Payload (New-WsPayload -Id 'ws-b' -Turn 3 -Timestamp '2026-09-27T10:05:00Z' -Research 'research/b.md' -Review 'reviews/review-b.md')
+        $two.ExitCode | Should -Be 0 -Because $two.Output
+        $two.Output | Should -Match 'Measure-SquadLedger -Check: PASS'
+
+        (Get-Content -LiteralPath (Join-Path $root 'state.json') -Raw | ConvertFrom-Json).turn | Should -Be 3
+        $history = (Get-Content -LiteralPath (Join-Path $root 'history/Squad Researcher.md') -Raw) -replace "`r`n", "`n"
+        $history | Should -Match '(?m)^\* Workstream: ws-a$'
+        $history | Should -Match '(?m)^\* Workstream: ws-b$'
+        ([regex]::Matches($history, '(?m)^### ')).Count | Should -Be 2
+        (Get-Content -LiteralPath (Join-Path $root 'decisions.md') -Raw) | Should -Match '(?m)^\* Workstream: ws-b\r?$'
+        (Get-Content -LiteralPath (Join-Path $root 'history/Squad Scribe.md') -Raw) | Should -Match '(?m)^\* Workstream: ws-a\r?$'
+        $check = Invoke-LedgerCheck -Root $root -Counts 'Squad Researcher=2;Squad Reviewer=2;Squad Scribe=2'
+        $check.ExitCode | Should -Be 0 -Because $check.Output
+    }
+
+    It 'still refuses a since before the previous hand-off when no workstream is named' {
+        $root = New-Root
+        (Invoke-Writer -Root $root -Payload (New-Payload)).ExitCode | Should -Be 0
+        $second = New-Payload
+        $second.turn = 3
+        $second.timestamp = '2026-09-27T10:05:00Z'
+        $second.since = '2026-09-27T09:00:00Z'
+        $before = Get-TreeHash $root
+        $result = Invoke-Writer -Root $root -Payload $second
+        $result.ExitCode | Should -Be 1 -Because $result.Output
+        $result.Output | Should -Match 'precedes state.json updated'
+        Get-TreeHash $root | Should -Be $before
+    }
+
+    It 'refuses a workstream payload without launchedAt or since, a since before launchedAt, and a launchedAt without a workstream' {
+        $root = New-WsRoot
+        $before = Get-TreeHash $root
+        $noLaunch = New-WsPayload -Id 'ws-a' -Turn 2 -Timestamp '2026-09-27T10:00:00Z' -Research 'research/a.md' -Review 'reviews/review-a.md'
+        $noLaunch.Remove('launchedAt')
+        $result = Invoke-Writer -Root $root -Payload $noLaunch
+        $result.ExitCode | Should -Be 1 -Because $result.Output
+        $result.Output | Should -Match 'launchedAt'
+        $noSince = New-WsPayload -Id 'ws-a' -Turn 2 -Timestamp '2026-09-27T10:00:00Z' -Research 'research/a.md' -Review 'reviews/review-a.md'
+        $noSince.Remove('since')
+        (Invoke-Writer -Root $root -Payload $noSince).ExitCode | Should -Be 1
+        $early = New-WsPayload -Id 'ws-a' -Turn 2 -Timestamp '2026-09-27T10:00:00Z' -Research 'research/a.md' -Review 'reviews/review-a.md' -Launched '2026-09-27T09:25:00Z' -Since '2026-09-27T09:20:00Z'
+        $result = Invoke-Writer -Root $root -Payload $early
+        $result.ExitCode | Should -Be 1 -Because $result.Output
+        $result.Output | Should -Match 'precedes payload.launchedAt'
+        $orphan = New-Payload
+        $orphan.launchedAt = '2026-09-27T09:10:00Z'
+        (Invoke-Writer -Root $root -Payload $orphan).ExitCode | Should -Be 1
+        Get-TreeHash $root | Should -Be $before
+    }
+
+    It 'refuses a launchedAt earlier than the latest ordinary hand-off, so a stale since cannot launder an old deliverable' {
+        $root = New-WsRoot
+        (Invoke-Writer -Root $root -Payload (New-Payload)).ExitCode | Should -Be 0
+        $before = Get-TreeHash $root
+        $stale = New-WsPayload -Id 'ws-a' -Turn 3 -Timestamp '2026-09-27T10:10:00Z' -Research 'research/a.md' -Review 'reviews/review-a.md' -Launched '2026-09-27T09:10:00Z' -Since '2026-09-27T09:20:00Z'
+        $result = Invoke-Writer -Root $root -Payload $stale
+        $result.ExitCode | Should -Be 1 -Because $result.Output
+        $result.Output | Should -Match 'precedes the hand-off that preceded the launch'
+        Get-TreeHash $root | Should -Be $before
+    }
+
+    It 'refuses a deliverable already credited to an earlier workstream and not modified since' {
+        $root = New-WsRoot
+        (Invoke-Writer -Root $root -Payload (New-WsPayload -Id 'ws-a' -Turn 2 -Timestamp '2026-09-27T10:00:00Z' -Research 'research/a.md' -Review 'reviews/review-a.md')).ExitCode | Should -Be 0
+        $before = Get-TreeHash $root
+        $reuse = New-WsPayload -Id 'ws-b' -Turn 3 -Timestamp '2026-09-27T10:05:00Z' -Research 'research/a.md' -Review 'reviews/review-b.md'
+        $result = Invoke-Writer -Root $root -Payload $reuse
+        $result.ExitCode | Should -Be 1 -Because $result.Output
+        $result.Output | Should -Match 'already credited'
+        Get-TreeHash $root | Should -Be $before
+    }
+
+    It 'refuses a workstream hand-off with no review-class record' {
+        $root = New-WsRoot
+        $before = Get-TreeHash $root
+        $result = Invoke-Writer -Root $root -Payload (New-WsPayload -Id 'ws-a' -Turn 2 -Timestamp '2026-09-27T10:00:00Z' -Research 'research/a.md' -Review 'reviews/review-a.md' -NoReview)
+        $result.ExitCode | Should -Be 1 -Because $result.Output
+        $result.Output | Should -Match 'review-class record'
+        Get-TreeHash $root | Should -Be $before
+    }
+
+    It 'refuses a malformed workstream id and a replayed turn without writing' {
+        $root = New-WsRoot
+        $bad = New-WsPayload -Id 'ws a; drop' -Turn 2 -Timestamp '2026-09-27T10:00:00Z' -Research 'research/a.md' -Review 'reviews/review-a.md'
+        $before = Get-TreeHash $root
+        (Invoke-Writer -Root $root -Payload $bad).ExitCode | Should -Be 1
+        Get-TreeHash $root | Should -Be $before
+
+        (Invoke-Writer -Root $root -Payload (New-WsPayload -Id 'ws-a' -Turn 2 -Timestamp '2026-09-27T10:00:00Z' -Research 'research/a.md' -Review 'reviews/review-a.md')).ExitCode | Should -Be 0
+        $replay = New-WsPayload -Id 'ws-b' -Turn 2 -Timestamp '2026-09-27T10:05:00Z' -Research 'research/b.md' -Review 'reviews/review-b.md'
+        $before = Get-TreeHash $root
+        (Invoke-Writer -Root $root -Payload $replay).ExitCode | Should -Be 1
+        Get-TreeHash $root | Should -Be $before
+    }
+
+    It 'records a Squad Workstream Lead own-turns block as a second orchestration block and the ledger counts it once' {
+        $root = New-WsRoot
+        $repo = (Resolve-Path (Join-Path $root '../..')).Path
+        Set-Content -LiteralPath (Join-Path $repo '.github/agents/squad/squad-workstream-lead.agent.md') -Value "---`nname: Squad Workstream Lead`nmodel: Claude Sonnet 4.6 (copilot)`n---`n# Lead`n"
+        $payload = New-WsPayload -Id 'ws-a' -Turn 2 -Timestamp '2026-09-27T10:00:00Z' -Research 'research/a.md' -Review 'reviews/review-a.md'
+        $payload.orchestration.leadConsumption = [ordered]@{ model = 'Claude Sonnet 4.6'; model_source = 'agent-pinned'; model_tier = 'default'; internal_turns = 5; input_tokens = 2000; cached_tokens = 8000; cache_write_tokens = 500; output_tokens = 1000; basis = 'estimated' }
+        $result = Invoke-Writer -Root $root -Payload $payload
+        $result.ExitCode | Should -Be 0 -Because $result.Output
+        $scribe = (Get-Content -LiteralPath (Join-Path $root 'history/Squad Scribe.md') -Raw) -replace "`r`n", "`n"
+        ([regex]::Matches($scribe, '(?m)^#### Consumption . Orchestration$')).Count | Should -Be 2
+        ([regex]::Matches($scribe, '(?m)^### ')).Count | Should -Be 1
+        $scribe | Should -Match '"model_source": "agent-pinned"'
+        $scribe | Should -Match '"priced_as": "Claude Sonnet 4.6"'
+        $ledger = (Get-Content -LiteralPath (Join-Path $root 'consumption.md') -Raw) -replace "`r`n", "`n"
+        $ledger | Should -Match '(?m)^Squad Scribe\.md . 2 block\(s\)'
+        (Invoke-LedgerCheck -Root $root -Counts 'Squad Researcher=1;Squad Reviewer=1;Squad Scribe=1').ExitCode | Should -Be 0
+    }
+
+    It 'refuses leadConsumption without a workstream, with a non-pinned source, or with a model that is not the lead pin' {
+        $root = New-WsRoot
+        $repo = (Resolve-Path (Join-Path $root '../..')).Path
+        Set-Content -LiteralPath (Join-Path $repo '.github/agents/squad/squad-workstream-lead.agent.md') -Value "---`nname: Squad Workstream Lead`nmodel: Claude Sonnet 4.6 (copilot)`n---`n# Lead`n"
+        $lead = [ordered]@{ model = 'Claude Sonnet 4.6'; model_source = 'agent-pinned'; model_tier = 'default'; internal_turns = 5; input_tokens = 2000; cached_tokens = 8000; cache_write_tokens = 500; output_tokens = 1000; basis = 'estimated' }
+        $before = Get-TreeHash $root
+        $noWs = New-Payload
+        $noWs.orchestration.leadConsumption = $lead
+        $result = Invoke-Writer -Root $root -Payload $noWs
+        $result.ExitCode | Should -Be 1 -Because $result.Output
+        $result.Output | Should -Match 'only valid with payload.workstream'
+        $inherited = New-WsPayload -Id 'ws-a' -Turn 2 -Timestamp '2026-09-27T10:00:00Z' -Research 'research/a.md' -Review 'reviews/review-a.md'
+        $inherited.orchestration.leadConsumption = [ordered]@{}; foreach ($k in $lead.Keys) { $inherited.orchestration.leadConsumption[$k] = $lead[$k] }
+        $inherited.orchestration.leadConsumption.model_source = 'session-inherited'
+        $result = Invoke-Writer -Root $root -Payload $inherited
+        $result.ExitCode | Should -Be 1 -Because $result.Output
+        $result.Output | Should -Match 'must be agent-pinned'
+        $wrong = New-WsPayload -Id 'ws-a' -Turn 2 -Timestamp '2026-09-27T10:00:00Z' -Research 'research/a.md' -Review 'reviews/review-a.md'
+        $wrong.orchestration.leadConsumption = [ordered]@{}; foreach ($k in $lead.Keys) { $wrong.orchestration.leadConsumption[$k] = $lead[$k] }
+        $wrong.orchestration.leadConsumption.model = 'Claude Haiku 4.5'
+        $wrong.orchestration.leadConsumption.model_tier = 'fast'
+        $result = Invoke-Writer -Root $root -Payload $wrong
+        $result.ExitCode | Should -Be 1 -Because $result.Output
+        $result.Output | Should -Match 'does not equal the frontmatter pin'
+        Get-TreeHash $root | Should -Be $before
+    }
+}
+
+Describe 'Write-SquadHandoff.ps1 appends a missing Cost Comparison (cost fixes)' {
+    It 'appends the template section with the squad figure when consumption.md has none, with no Scribe note, and the ledger check and identity guard pass' {
+        $root = New-Root
+        $path = Join-Path $root 'consumption.md'
+        $text = (Get-Content -LiteralPath $path -Raw) -replace "`r`n", "`n"
+        $text = [regex]::Replace($text, '(?s)\n## Cost Comparison \(illustrative\).*$', "`n")
+        $text | Should -Not -Match 'Cost Comparison'
+        [System.IO.File]::WriteAllText($path, $text, [System.Text.UTF8Encoding]::new($false))
+        $result = Invoke-Writer -Root $root -Payload (New-Payload)
+        $result.ExitCode | Should -Be 0 -Because $result.Output
+        $result.Output | Should -Not -Match 'Squad Scribe writes it'
+        $result.Output | Should -Match 'APPENDED Cost Comparison'
+        $after = (Get-Content -LiteralPath $path -Raw) -replace "`r`n", "`n"
+        ([regex]::Matches($after, '(?m)^## Cost Comparison \(illustrative\)$')).Count | Should -Be 1
+        $after | Should -Match ([regex]::Escape('This run consumed an estimated **$0.3171 (~31.71 AI credits)** across 1 specialized agent(s) (squad figure only;'))
+        $after | Should -Match '(?m)^> Estimates only\.'
+        (Invoke-LedgerCheck -Root $root -Counts 'Squad Researcher=1;Squad Scribe=1').ExitCode | Should -Be 0
+
+        # A later hand-off refreshes the appended line instead of appending a second section.
+        $next = New-Payload
+        $next.turn = 3
+        $next.timestamp = '2026-09-27T10:05:00Z'
+        $next.Remove('decision'); $next.Remove('route')
+        $next.since = '2026-09-27T10:00:00Z'
+        (Get-Item -LiteralPath (Join-Path $root 'research/2026-09-27-fixture-topic.md')).LastWriteTimeUtc = [DateTime]::Parse('2026-09-27T10:03:00Z').ToUniversalTime()
+        $second = Invoke-Writer -Root $root -Payload $next
+        $second.ExitCode | Should -Be 0 -Because $second.Output
+        $final = (Get-Content -LiteralPath $path -Raw) -replace "`r`n", "`n"
+        ([regex]::Matches($final, '(?m)^## Cost Comparison \(illustrative\)$')).Count | Should -Be 1
+        (Invoke-LedgerCheck -Root $root -Counts 'Squad Researcher=2;Squad Scribe=2').ExitCode | Should -Be 0
     }
 }

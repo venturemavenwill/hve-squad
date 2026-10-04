@@ -258,7 +258,7 @@ $hasPreflight = $run.AsObject().ContainsKey('costPreflight')
 
 $bump = $false
 if ($schema -eq $currentSchema) {
-    if (-not $hasPreflight) { Stop-Preflight 1 "state.json schema $schema lacks currentRun.costPreflight. Nothing written." }
+    # entry-schemas.md: a current-schema state without the object reads as not-requested, so the write simply adds it.
 }
 elseif ($schema -eq $legacySchema) {
     if ($hasPreflight) { Stop-Preflight 1 "state.json schema $schema already carries currentRun.costPreflight. Nothing written." }
