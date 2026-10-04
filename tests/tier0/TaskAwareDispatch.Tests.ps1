@@ -795,3 +795,22 @@ Describe 'Dispatch brief replaces discovery turns' {
         Test-Path -LiteralPath $script:BriefScript | Should -BeTrue
     }
 }
+
+Describe 'Cost Manager reviews the squad''s own AI spend by value' {
+    BeforeAll {
+        $script:CostManager = @($script:Model.SquadAgents | Where-Object Name -eq 'squad-cost-manager.agent.md')[0]
+    }
+
+    It 'has an AI spend review mode that measures cost per accepted deliverable, not per dispatch' {
+        $script:CostManager.Body | Should -Match ([regex]::Escape('An AI spend review (the squad''s own model spend, not an Azure workload) skips Steps 2 to 4 and runs Step 5.'))
+        $script:CostManager.Body | Should -Match ([regex]::Escape('A deliverable no review accepted carries zero value: never divide by dispatches or by deliverables merely produced.'))
+        $script:CostManager.Body | Should -Match ([regex]::Escape('`## Unit Economics (value)`'))
+    }
+
+    It 'labels every figure, compares medians of several like runs, and keeps pin, ceiling, and roster changes at confirm tier' {
+        $script:CostManager.Body | Should -Match ([regex]::Escape('Mark each number `measured`'))
+        $script:CostManager.Body | Should -Match ([regex]::Escape('with at least three runs per side, reporting medians and the spread'))
+        $script:CostManager.Body | Should -Match ([regex]::Escape('Each recommendation that changes a pin, a ceiling, or the roster is `confirm`-tier.'))
+        $script:CostManager.Body.Length | Should -BeLessOrEqual 30000
+    }
+}

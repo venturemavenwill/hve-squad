@@ -55,6 +55,23 @@ orchestration  turns 0+0=0    0 × 0.00 +      0 × 0.00 +      0 × 0.00 +     
 >
 > The `history/<file> — <n> block(s) — identities: <hash>,<hash>,...` line above each file's derivation is not decoration: it is the ledger's own record of which `###` entries it has already folded in, one short deterministic hash per entry in file order. A rewrite that finds this run's recorded identities are not an ordered prefix of the file's current identities — same count but different hashes, or fewer current entries than recorded — means an entry was overwritten, reordered, or removed since the last rewrite rather than only appended to, and `Measure-SquadLedger.ps1 -Check` (or render mode) refuses rather than silently accepting it. A pre-existing ledger with no recorded identities at all (an older-format entry) only warns when checked plainly; it never fails on that account alone. But the Scribe's own post-write self-check always runs `-Check` together with `-ExpectedHistoryCounts` (*scribe-procedure.md*'s Write-Completeness Self-Check Step 3), and in that combination a Derivation missing identities entirely, or missing them for only some of the touched files (a partial paste), FAILS instead of warning — that call always follows a fresh write, so a missing or partial paste there is this run's own defect, never a genuinely old ledger.
 
+## Unit Economics (value)
+
+| Measure                               | Value | Label     |
+| ------------------------------------- | ----- | --------- |
+| Deliverables produced                 | <n>   | derived   |
+| Accepted by an independent review     | <n>   | derived   |
+| Rejected                              | <n>   | derived   |
+| Unreviewed                            | <n>   | derived   |
+| Dispatches (excluding Scribe)         | <n>   | derived   |
+| Rework dispatches                     | <n>   | derived   |
+| First-pass yield                      | <pct> | derived   |
+| Est. credits per accepted deliverable | <n>   | estimated |
+| Rework share of est. credits          | <pct> | estimated |
+| Orchestration share of est. credits   | <pct> | estimated |
+
+Value is counted only for deliverables an independent review-class verdict accepted; a produced but unaccepted deliverable adds cost and no value. Compare runs only for like work, using medians of several runs. Source: FinOps Foundation unit-economics KPIs (cost per unit of value, error and retry waste).
+
 ## Cost Comparison (illustrative)
 
 This run consumed an estimated **$<squad-cost> (~<squad-credits> AI credits)** across <n> specialized agents, routing read-heavy roles to lightweight models and reserving high-output reasoning models only where needed. Reproducing the same outcome by manually prompting <baseline-model> across roughly <iterations> iterate-and-test turns, each priced through the same dispatch-size estimator, is estimated at **$<manual-cost> (~<manual-credits> AI credits)** — a saving of about **<savings-pct>%**.
@@ -104,7 +121,7 @@ Resolve the active run id before this decision from the run the coordinator is c
 
 The coordinator persists every round only through `scripts/Set-SquadCostPreflight.ps1`, per *Cost Preflight Procedure* step 3 in `references/gates-and-modes.md`: the compact object is its `-PreflightJson` and the readable record below is its `-DecisionText`.
 
-An effectively unset ceiling records `not-requested` and preserves existing behavior. A configured ceiling must be a finite positive USD number. The configured decisions are `within-ceiling`, `over-ceiling`, `approved-over-ceiling`, and `cannot-confirm`. `within-ceiling` and `approved-over-ceiling` permit only the exact next-dispatch set recorded by their round; the latter is created only by the explicit approval transition below.
+An effectively unset ceiling records `not-requested` and preserves existing behavior. A state whose `currentRun.costPreflight` is absent reads as `not-requested` already: with no ceiling, write nothing and dispatch no Scribe for it (`Set-SquadCostPreflight.ps1` adds the object when a later ceiling is written, and `Write-SquadHandoff.ps1` adds the same default). A configured ceiling must be a finite positive USD number. The configured decisions are `within-ceiling`, `over-ceiling`, `approved-over-ceiling`, and `cannot-confirm`. `within-ceiling` and `approved-over-ceiling` permit only the exact next-dispatch set recorded by their round; the latter is created only by the explicit approval transition below.
 
 ### Planned-dispatch manifest
 
@@ -217,9 +234,13 @@ difference_pct      = (without_squad_usd − with_squad_usd) / without_squad_usd
 
 The host reports one token total per dispatch, never the input, cached, and output split, so both sides use the same blended mix. Neither side includes coordinator turns, and the single-model side adds no extra context growth or rework, so it is a floor for that scenario rather than a forecast. A sub-squad root counts only dispatches whose prompt names its `members/<name>/` root. Without a matching session log the section is omitted and the estimates stand alone.
 
+## Unit economics (value)
+
+`Measure-SquadLedger.ps1 -Write` writes the `## Unit Economics (value)` section (replacing it on every rewrite, before `## Observed Usage (host-reported)` or `## Cost Comparison`); it is never hand-authored, and `-Check` ignores it. It divides cost by value: a deliverable counts only when the latest covering review-class entry (same `Turn` and `Workstream`) reads pass, pass-with-findings, or approved in its `Outcome`; fail, rejected, or blocked marks it rejected, and no covering review leaves it unreviewed. A rework dispatch is a non-Scribe entry whose agent and deliverable already appeared in an earlier entry; first-pass yield is the accepted deliverables with none. With a session log, a `measured` row divides the host-billed credits by the accepted count.
+
 ## Manual Ledger Checks
 
-Moved from `scribe-procedure.md` Consumption Accounting Step 7 so the hot core stays within its size budget; this file is read on every history turn. A script hand-off (`Write-SquadHandoff.ps1`) writes the squad figure and, in an existing comparison, recomputes the squad cost, credits, and saving percentage from its stated baseline. It re-seeds a `consumption.md` that lacks the ledger sections from the template above. It treats a `state.json` without `currentRun.costPreflight` as the unset default (1.3 becomes 1.4); a configured ceiling still goes to the Scribe.
+Moved from `scribe-procedure.md` Consumption Accounting Step 7 so the hot core stays within its size budget; this file is read on every history turn. A script hand-off (`Write-SquadHandoff.ps1`) writes the squad figure and, in an existing comparison, recomputes the squad cost, credits, and saving percentage from its stated baseline. It re-seeds a `consumption.md` that lacks the ledger sections from the template above, and appends the template's `## Cost Comparison (illustrative)` section with the squad-figure line when the ledger has none, so the Scribe is never dispatched for it. It treats a `state.json` without `currentRun.costPreflight` as the unset default (1.3 becomes 1.4); a configured ceiling still goes to the Scribe.
 
 **The Cost Comparison section is required, and it names three figures**: what this run cost, what the manual baseline would have cost, and the saving as a percentage. When `consumption.md` has an *Observed Usage* section, take all three from its billed total and *Without HVE Squad* table instead. Otherwise, derive the baseline per *Comparison methodology* — `expected_iterations × baseline_model_cost_per_turn`, with a manual turn priced through the same dispatch-size estimator — and state the iteration count and the baseline model the section assumed, so a reader can disagree with the assumption rather than only with the answer. A per-turn or per-phase breakdown may be added below it and never in place of it. Carry the estimates-only disclaimer, the calibration factor, and the observation count on both the ledger and the comparison. When any row resolved to `unknown`, say so rather than presenting a confident-looking model name.
 
