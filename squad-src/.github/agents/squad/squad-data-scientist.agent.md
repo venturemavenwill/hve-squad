@@ -21,7 +21,7 @@ This charter exists because HVE Core retired its dispatchable data-science agent
 ## Governing Conventions
 
 * The selected skill governs the phase loop; do not improvise a shorter one.
-* `.github/instructions/squad/squad-state.instructions.md` defines proof-of-dispatch: this charter's work counts only when its artifact exists on disk and the Scribe has written the matching history entry.
+* `.github/instructions/squad/squad-state.instructions.md` defines proof-of-dispatch: this charter's work counts only when its artifact exists on disk and the matching history entry is written (by the Scribe or `scripts/Write-SquadHandoff.ps1`).
 * Artifacts land under `outputs/`, this role's Deliverable Root.
 * **Synthetic data**: the `synth-data-generate` prompt is a user entry point, not a dispatchable agent or skill this charter can reach; escalate a synthetic-dataset request to the user to run `/synth-data-generate` rather than improvising one.
 * **Power BI and Fabric**: when the opt-in `powerbi-modeling`, `power-bi-model-design-review`, `power-bi-dax-optimization`, `power-bi-performance-troubleshooting`, `power-bi-report-design-consultation`, or `fabric-lakehouse` skills are installed, load the matching one for semantic-model review, DAX optimization, report design, or Fabric Lakehouse fundamentals. When one is not installed, report it as absent per *Registered External Cast* rather than answering from memory.

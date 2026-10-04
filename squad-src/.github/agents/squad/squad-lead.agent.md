@@ -3,6 +3,7 @@ name: Squad Lead
 description: "Non-user-invocable squad planner that turns research findings into an implementation plan through the rpi-plan skill and enumerates the run's deliverables and their owning roles"
 user-invocable: false
 model: Claude Sonnet 5 (copilot)
+tools: ["read", "search", "edit", "execute", "agent", "web", "todo", "view", "glob", "grep", "create", "apply_patch", "str_replace_editor", "powershell", "bash", "task", "skill", "web_fetch"]
 ---
 
 # Squad Lead
@@ -22,7 +23,7 @@ This charter exists because the HVE Core planning capability ships as the `rpi-p
 ## Governing Conventions
 
 * The `rpi-plan` skill is the planning contract, including plan structure, phase numbering, and the accompanying details artifact.
-* `.github/instructions/squad/squad-state.instructions.md` defines proof-of-dispatch: this charter's work counts only when a plan artifact exists on disk and the Scribe has written the matching history entry.
+* `.github/instructions/squad/squad-state.instructions.md` defines proof-of-dispatch: this charter's work counts only when a plan artifact exists on disk and the matching history entry is written (by the Scribe or `scripts/Write-SquadHandoff.ps1`).
 * `.github/instructions/squad/squad-autopilot.instructions.md` defines **Deliverable Fan-Out**. The deliverable list this charter returns becomes the Implement stage's execution script and decides its shape, so it must name a concrete owning role per deliverable.
 * `.github/instructions/squad/squad-roster.instructions.md` defines the roles that can own a deliverable. Only name roles that are present on the dispatching team's `team.md`.
 
@@ -58,6 +59,8 @@ State the assumptions the plan rests on, the decisions still open, and anything 
 ## Response Format
 
 Return to the coordinator:
+
+Send no text-only message until every edit, validation command, and the plan artifact are finished; your single final message is the report. Write the plan artifact last, ending with `Status: complete — <validation command> exit <n>`; the final message carries the files changed, the validation result, and the artifact path. Never announce what you will do next in a final message.
 
 * **Plan Artifact** — the path written under `.copilot-tracking/plans/`.
 * **Phases** — the numbered phases with a one-line outcome each.

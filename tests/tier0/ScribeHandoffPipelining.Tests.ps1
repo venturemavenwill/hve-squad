@@ -114,8 +114,8 @@ Describe 'Scribe Hand-off Pipelining wording pins (GATE-22..GATE-28)' {
             $payloadTemplate | Should -Match ([regex]::Escape('### 1.8 Ledger Command'))
             $payloadTemplate | Should -Match ([regex]::Escape('ledgerCommand: pwsh -NoProfile -File "<skill root>/scripts/Measure-SquadLedger.ps1" -SquadRoot "<squadRoot>" -Write -SessionLog auto'))
             $scribe = @($script:Model.SquadAgents | Where-Object Name -eq 'squad-scribe.agent.md')[0]
-            $scribe.Body | Should -Match ([regex]::Escape('**When the payload carries `ledgerCommand`, run it verbatim with the shell tool immediately after Step 13.**'))
-            (Get-SquadReferenceBody -Name 'scribe-procedure.md') | Should -Match ([regex]::Escape('this entire step is that one command, run after Step 13'))
+            $scribe.Body | Should -Match ([regex]::Escape('**With `pwsh` 7+, run `ledgerCommand` verbatim (or `Measure-SquadLedger.ps1 -Write -SessionLog auto` when omitted) with the shell tool immediately after Step 13.**'))
+            (Get-SquadReferenceBody -Name 'scribe-procedure.md') | Should -Match ([regex]::Escape('this entire step is the script run after Step 13'))
         }
 
         It 'single-writer invariant: at most one Scribe hand-off in flight per squad root, queued in stage order' {
@@ -225,6 +225,21 @@ Describe 'Scribe Hand-off Pipelining wording pins (GATE-22..GATE-28)' {
             $script:FloorInstructions.Body | Should -Not -Match ([regex]::Escape("A stage counts as run only when both exist: its domain artifact on disk at the role's ``Deliverable Root``"))
         }
 
+        It 'the Enablement Predicate requires a coordinator shell with pwsh 7+ and a failed read check never re-dispatches the Scribe' {
+            $script:GatesAndModesBody | Should -Match ([regex]::Escape('the coordinator has a shell and `pwsh` 7+ (the verification below needs its baseline)'))
+            $script:GatesAndModesBody | Should -Match ([regex]::Escape('A failed pipelined read check or verification is a failed hand-off: it latches pipelining off and follows *Fail-closed and correction*, never a Scribe re-dispatch.'))
+        }
+
+        It 'the payload template runs ledgerCommand whether supplied or not, and ledger verification covers every hand-off with pwsh 7+' {
+            (Get-SquadReferenceBody -Name 'scribe-payload-template.md') | Should -Match ([regex]::Escape('when `pwsh` 7+ exists, supplied or not.'))
+            $script:OperatingProcedureBody | Should -Match ([regex]::Escape('Applies to every Scribe hand-off when `pwsh` 7+ is available, whether or not `ledgerCommand` is supplied'))
+        }
+
+        It 'the Route section keeps the moved missing-agent, packs, and no-model sentences' {
+            $script:OperatingProcedureBody | Should -Match ([regex]::Escape('a dispatch against a missing or user-invocable-only agent returns nothing, which is where inline improvisation starts.'))
+            $script:OperatingProcedureBody | Should -Match ([regex]::Escape('Packs add to a profile and never replace it.'))
+            $script:OperatingProcedureBody | Should -Match ([regex]::Escape('The Squad Coordinator declares **no `model:`**: the consumer''s selection is the session model.'))
+        }
         It 'the Enablement Predicate''s host term is never described as hardcoding false' {
             $script:GatesAndModesBody | Should -Not -Match ([regex]::Escape('hardcodes `false`'))
         }

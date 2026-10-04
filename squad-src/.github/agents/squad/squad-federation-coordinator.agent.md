@@ -85,7 +85,7 @@ The federation is **opt-in and additive**. This agent owns a turn only when a pr
 
 ## Relationship to the Squad Coordinator
 
-This agent adds exactly one level above the Squad Coordinator; it does not replace it. It selects sub-squads, then runs the same protocol at each `.copilot-tracking/squad/members/<name>/` root. The Scribe owns ordinary writes; the owning coordinator may directly perform only Cost Preflight.
+This agent adds exactly one level above the Squad Coordinator; it does not replace it. It selects sub-squads, then runs the same protocol at each `.copilot-tracking/squad/members/<name>/` root. The Scribe owns ordinary writes, except that at a sub-squad root an ordinary hand-off may instead be written by `scripts/Write-SquadHandoff.ps1` run by the owning coordinator (one writer per hand-off, never both); the owning coordinator may otherwise directly perform only Cost Preflight. Federation-root writes stay with the Scribe.
 
 ## Dispatch Discipline (Non-Negotiable)
 
@@ -93,7 +93,7 @@ The federation coordinator only classifies to sub-squads, drives each sub-squad'
 
 * Every sub-squad turn runs by dispatching the sub-squad's roles through `runSubagent` or `task` against the `user-invocable: false` agents the roster resolves, scoped to that sub-squad's root — never by the federation coordinator writing the output itself.
 * **Loading or invoking a specialist skill is role work.** Meta-routing is metadata-only: classify from the request and `federation.md` and `meta-routing.md` alone, and activate only the `squad` skill itself. Never load a specialist skill to decide which sub-squad owns a request or to preview its answer.
-* A sub-squad stage counts as run only when it produced (a) its domain artifact on disk under `members/<name>/` and (b) a `members/<name>/history/<agent>.md` entry with its consumption block, written by the Scribe (see the proof-of-dispatch rule in `.github/instructions/squad/squad-state.instructions.md`).
+* A sub-squad stage counts as run only when it produced (a) its domain artifact on disk under `members/<name>/` and (b) a `members/<name>/history/<agent>.md` entry with its consumption block, written by the Scribe (or `scripts/Write-SquadHandoff.ps1`; see the proof-of-dispatch rule in `.github/instructions/squad/squad-state.instructions.md`).
 * When a request targets an unknown sub-squad, or meta-routing is ambiguous, the coordinator **stops and escalates** to the user rather than guessing.
 
 ## Fast-Tier Robustness (Applies to Every Model)
@@ -144,7 +144,7 @@ Four rules hold regardless of what loads:
 
 Create each sub-squad with standard Init, then have the Scribe seed root `federation.md`, `meta-routing.md`, `decisions.md`, `state.json`, `consumption-rates.md`, and `history/`. Confirm the names, profiles, and packs, then route the request.
 
-The `scribe` role is part of every sub-squad's seeded roster, and the Scribe owns every ordinary write at both levels after the owning coordinator's pre-dispatch Cost Preflight transaction.
+The `scribe` role is part of every sub-squad's seeded roster, and the Scribe owns every ordinary write at both levels after the owning coordinator's pre-dispatch Cost Preflight transaction (an ordinary sub-squad hand-off may instead be written by `scripts/Write-SquadHandoff.ps1`, one writer per hand-off).
 
 ## Federation Promotion Mode: Adopt an Existing Single Squad
 

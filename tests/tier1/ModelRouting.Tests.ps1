@@ -551,6 +551,101 @@ Describe 'Resolve-SquadModelRoute.ps1 ranks by fit, not by name (case l)' {
         $result.roles[0].cellStatus | Should -Be $Status
         if ($Status -like 'valid*') { $result.roles[0].resolved | Should -Be $Cell } else { $result.roles[0].resolved | Should -BeNullOrEmpty }
     }
+
+    It '-Bounded under routing off picks the lowest-Blended eligible id at fit 2 or better on a fast floor: gpt-5.4-mini for developer and technical-writer' {
+        $result = Invoke-Resolver -Root $script:FullRoot -Extra @{ AvailableModels = $script:CliEnum; Bounded = $true; Role = @('developer', 'technical-writer') }
+        $result.mode | Should -Be 'off'
+        foreach ($entry in $result.roles) {
+            $entry.boundedPick | Should -Be 'gpt-5.4-mini' -Because "$($entry.role) resolves to the cheapest adequate id"
+            $entry.resolved | Should -Be $entry.suggested -Because '-Bounded only adds fields and never changes resolved'
+            $entry.suggested | Should -Not -Be 'gpt-5.4-mini' -Because 'the normal ranked suggestion is unchanged'
+        }
+    }
+
+    It '-Bounded never changes resolved for any role and gives a pick only to implementation-class roles' {
+        $plain = Invoke-Resolver -Root $script:FullRoot -Extra @{ AvailableModels = $script:CliEnum }
+        $bounded = Invoke-Resolver -Root $script:FullRoot -Extra @{ AvailableModels = $script:CliEnum; Bounded = $true }
+        foreach ($entry in $bounded.roles) {
+            $before = $plain.roles | Where-Object { $_.role -eq $entry.role }
+            $entry.resolved | Should -Be $before.resolved -Because "$($entry.role): resolved must not move under -Bounded"
+            if ($entry.class -ne 'implementation') { $entry.boundedPick | Should -BeNullOrEmpty -Because "$($entry.role) is class $($entry.class)" }
+        }
+        foreach ($roleId in 'scribe', 'tester', 'lead', 'intake-validator', 'architect', 'researcher') {
+            $entry = $bounded.roles | Where-Object { $_.role -eq $roleId }
+            if ($entry) { $entry.boundedPick | Should -BeNullOrEmpty -Because "$roleId never takes a bounded pick" }
+        }
+        ($bounded.roles | Where-Object { $_.role -eq 'scribe' }).resolved | Should -Be $script:PickOf['scribe']
+    }
+
+    It '-Bounded under ranked routing keeps the Model cell: no pick' {
+        $result = Invoke-Resolver -Root $script:FullRoot -Extra @{ AvailableModels = $script:CliEnum; Mode = 'ranked'; Bounded = $true; Role = @('developer') }
+        $result.roles[0].boundedPick | Should -BeNullOrEmpty
+        $result.roles[0].boundedRationale | Should -Match 'keeps the Model cell'
+    }
+
+    It '-Bounded never lowers the closing tester or any review-class role' {
+        $result = Invoke-Resolver -Root $script:FullRoot -Extra @{ AvailableModels = $script:CliEnum; Bounded = $true; Role = @('tester') }
+        $result.roles[0].boundedPick | Should -BeNullOrEmpty
+        $result.roles[0].boundedRationale | Should -Match 'review role'
+        $result.roles[0].resolved | Should -Be $script:PickOf['tester']
+    }
+
+    It '-Bounded yields to manual routing and falls back to normal resolution without an eligible id' {
+        $manualRoot = Initialize-RosterFixture -Content (@(
+                '# Squad Roster', '', 'Model routing: manual', '', '## Members', ''
+                '| Role | Member Name | Agent Name (Primary) | Model Tier | Model | Deliverable Root |'
+                '|------|-------------|----------------------|------------|-------|------------------|'
+                '| developer | | Squad Implementor | default | claude-opus-4.8 | src/ |'
+            ) -join "`n")
+        $manual = Invoke-Resolver -Root $manualRoot -Extra @{ AvailableModels = $script:CliEnum; Bounded = $true }
+        $manual.roles[0].boundedPick | Should -BeNullOrEmpty
+        $manual.roles[0].resolved | Should -Be 'claude-opus-4.8'
+
+        $none = Invoke-Resolver -Root $script:FullRoot -Extra @{ AvailableModels = @('claude-opus-5'); Bounded = $true; Role = @('developer') }
+        $none.roles[0].boundedPick | Should -BeNullOrEmpty
+        $none.roles[0].boundedRationale | Should -Match 'normal resolution'
+    }
+
+    It 'the ranked pick at the real floor out-fits the bounded pick, so escalation to the stronger of pin and ranked pick never lowers fit' {
+        $result = Invoke-Resolver -Root $script:FullRoot -Extra @{ AvailableModels = $script:CliEnum; Bounded = $true; Role = @('developer', 'technical-writer') }
+        foreach ($entry in $result.roles) {
+            $pick = $entry.candidates | Where-Object { $_.id -eq $entry.boundedPick } | Select-Object -First 1
+            $top = $entry.candidates | Select-Object -First 1
+            $top.id | Should -Be $entry.suggested
+            if ($pick) { $top.fit | Should -BeGreaterThan $pick.fit -Because "$($entry.role): escalation must not fall to the bounded pick's fit" }
+            else { $top.fit | Should -BeGreaterThan 2 -Because "$($entry.role): the bounded pick has fit 2" }
+        }
+    }
+
+    It '-Bounded -Format markdown carries the bounded pick column' {
+        $text = (& $script:Resolver -SquadRoot $script:FullRoot -AsOf ([datetime]'2026-10-01') -AvailableModels $script:CliEnum -Bounded -Role developer -Format markdown) -join "`n"
+        $text | Should -Match 'Bounded pick'
+        $text | Should -Match 'gpt-5.4-mini'
+    }
+    It '-Bounded escalation reads the agent pin under a Primary header exactly as under Agent Name (Primary)' {
+        # A restricted available set makes the pin the stronger target; a missing pin falls back to the ranked pick.
+        $escalation = foreach ($header in 'Agent Name (Primary)', 'Primary') {
+            $repo = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+            $root = Join-Path $repo '.copilot-tracking/squad'
+            New-Item -ItemType Directory -Path $root, (Join-Path $repo '.github/agents') -Force | Out-Null
+            Set-Content -LiteralPath (Join-Path $repo '.github/agents/squad-implementor.agent.md') -Value "---`nname: Squad Implementor`nmodel: Claude Opus 5.5 (copilot)`n---`n# Implementor`n" -Encoding utf8NoBOM
+            Set-Content -LiteralPath (Join-Path $root 'team.md') -Encoding utf8NoBOM -Value (@(
+                    '# Squad Roster', '', '## Members', ''
+                    "| Role | Member Name | $header | Model Tier | Deliverable Root |"
+                    '|------|-------------|---------|------------|------------------|'
+                    '| developer | | Squad Implementor | default | src/ |'
+                ) -join "`n")
+            $result = Invoke-Resolver -Root $root -Extra @{ AvailableModels = @('gpt-5.4-mini', 'gpt-5.4'); Bounded = $true }
+            $result.roles[0].boundedPick | Should -Be 'gpt-5.4-mini'
+            $result.roles[0].suggested | Should -Be 'gpt-5.4'
+            $result.roles[0].boundedEscalation
+        }
+        $escalation[0] | Should -Be 'claude-opus-5.5' -Because 'the pin out-fits the ranked pick'
+        $escalation[1] | Should -Be $escalation[0]
+    }
+    It 'omits the bounded fields unless -Bounded is passed' {
+        $script:Ranked.roles[0].PSObject.Properties.Name | Should -Not -Contain 'boundedPick'
+    }
 }
 
 Describe 'Seeded roster defaults for routing (case m)' {

@@ -3,6 +3,7 @@ name: Squad Technical Writer
 description: "Non-user-invocable squad documentation author that runs the documentation skill to author and maintain project documentation for a squad deliverable"
 user-invocable: false
 model: Claude Haiku 4.5 (copilot)
+tools: ["read", "search", "edit", "execute", "agent", "web", "todo", "view", "glob", "grep", "create", "apply_patch", "str_replace_editor", "powershell", "bash", "task", "skill", "web_fetch"]
 ---
 
 # Squad Technical Writer
@@ -24,6 +25,7 @@ This charter exists because the HVE Core documentation capability ships as the `
 * Repository instruction files for markdown and writing style auto-apply by path; follow them rather than a generic style.
 * Ground every statement in a squad artifact (requirements, plan, change record, review record) or in the code itself. When a fact is not evidenced, mark it as an open question rather than asserting it.
 * Documentation writes under `docs/` and `.copilot-tracking/` are not impactful actions and need no gate. Publishing outside the repository does, and is returned to the coordinator instead.
+* For a `bounded` dispatch (the brief names the target files and the exact change), read only the named files and do not explore the repository, but you may search for references to any symbol, heading, or link you change; when a dependent outside the named files needs a change, return `blocked: not bounded` without editing it. The skill's phase loop collapses to one phase. Markdown and writing-style instructions still apply, the skill's validation pass still runs, and the paths written are still returned.
 
 ## Inputs
 
@@ -53,6 +55,8 @@ Run the skill's validation pass and resolve its findings. Confirm every internal
 ## Response Format
 
 Return to the coordinator:
+
+Send no text-only message until every edit, validation command, and the change record are finished; your single final message is the report. Write the change record last, ending with `Status: complete — <validation command> exit <n>`; the final message carries the files changed, the validation result, and the change-record path. Never announce what you will do next in a final message.
 
 * **Mode** — the documentation-skill mode used.
 * **Paths Written** — every file created or updated.

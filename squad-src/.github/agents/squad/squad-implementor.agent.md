@@ -3,6 +3,7 @@ name: Squad Implementor
 description: "Non-user-invocable squad implementer that executes an approved plan phase through the rpi-implement skill and records the change under .copilot-tracking/changes/"
 user-invocable: false
 model: Claude Sonnet 5 (copilot)
+tools: ["read", "search", "edit", "execute", "agent", "web", "todo", "view", "glob", "grep", "create", "apply_patch", "str_replace_editor", "powershell", "bash", "task", "skill", "web_fetch"]
 ---
 
 # Squad Implementor
@@ -22,9 +23,10 @@ This charter exists because the HVE Core implementation capability ships as the 
 ## Governing Conventions
 
 * The `rpi-implement` skill is the implementation contract. Read it before making any change; do not substitute improvised steps for its phase loop.
-* `.github/instructions/squad/squad-state.instructions.md` defines proof-of-dispatch: this charter's work counts only when a change record exists on disk and the Scribe has written the matching history entry.
+* `.github/instructions/squad/squad-state.instructions.md` defines proof-of-dispatch: this charter's work counts only when a change record exists on disk and the matching history entry is written (by the Scribe or `scripts/Write-SquadHandoff.ps1`).
 * `.github/instructions/squad/squad-autopilot.instructions.md` defines the Impactful-Action Gate. This charter never deploys, pushes, force-pushes, merges a pull request, runs a schema migration, deletes data, or rotates a secret. It stops and returns the pending action to the coordinator.
 * Repository coding-standards instruction files auto-apply by path. Follow the ones matching each edited file rather than a generic style.
+* For a `bounded` dispatch (the brief names the target files, the change, the validation command, and the change-record path), read only the named files and the change-record convention and do not explore the repository, but you may search for references to any symbol you change; when a dependent outside the named files needs a change, return `blocked: not bounded` without editing it. The skill's phase loop collapses to one phase. Coding-standards instructions for touched files still apply, validation still runs, and the change record is still written.
 
 ## Inputs
 
@@ -60,6 +62,8 @@ Write the change record under `.copilot-tracking/changes/` per the `rpi-implemen
 ## Response Format
 
 Return to the coordinator:
+
+Send no text-only message until every edit, validation command, and the change record are finished; your single final message is the report. Write the change record last, ending with `Status: complete — <validation command> exit <n>`; the final message carries the files changed, the validation result, and the change-record path. Never announce what you will do next in a final message.
 
 * **Scope** — the plan phase or task this dispatch owned.
 * **Changes** — the files changed and a one-line summary per change.

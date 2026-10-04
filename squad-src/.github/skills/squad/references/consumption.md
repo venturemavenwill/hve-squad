@@ -102,6 +102,8 @@ Resolve the effective ceiling before building the manifest:
 
 Resolve the active run id before this decision from the run the coordinator is continuing or creating. A new autopilot topic, Watch event, or federation meta-run gets a new id; a later request that resumes that recorded run keeps its id. Never copy a ceiling across run ids.
 
+The coordinator persists every round only through `scripts/Set-SquadCostPreflight.ps1`, per *Cost Preflight Procedure* step 3 in `references/gates-and-modes.md`: the compact object is its `-PreflightJson` and the readable record below is its `-DecisionText`.
+
 An effectively unset ceiling records `not-requested` and preserves existing behavior. A configured ceiling must be a finite positive USD number. The configured decisions are `within-ceiling`, `over-ceiling`, `approved-over-ceiling`, and `cannot-confirm`. `within-ceiling` and `approved-over-ceiling` permit only the exact next-dispatch set recorded by their round; the latter is created only by the explicit approval transition below.
 
 ### Planned-dispatch manifest
@@ -214,3 +216,11 @@ difference_pct      = (without_squad_usd − with_squad_usd) / without_squad_usd
 ```
 
 The host reports one token total per dispatch, never the input, cached, and output split, so both sides use the same blended mix. Neither side includes coordinator turns, and the single-model side adds no extra context growth or rework, so it is a floor for that scenario rather than a forecast. A sub-squad root counts only dispatches whose prompt names its `members/<name>/` root. Without a matching session log the section is omitted and the estimates stand alone.
+
+## Manual Ledger Checks
+
+Moved from `scribe-procedure.md` Consumption Accounting Step 7 so the hot core stays within its size budget; this file is read on every history turn. A script hand-off (`Write-SquadHandoff.ps1`) writes the squad figure and, in an existing comparison, recomputes the squad cost, credits, and saving percentage from its stated baseline. It re-seeds a `consumption.md` that lacks the ledger sections from the template above. It treats a `state.json` without `currentRun.costPreflight` as the unset default (1.3 becomes 1.4); a configured ceiling still goes to the Scribe.
+
+**The Cost Comparison section is required, and it names three figures**: what this run cost, what the manual baseline would have cost, and the saving as a percentage. When `consumption.md` has an *Observed Usage* section, take all three from its billed total and *Without HVE Squad* table instead. Otherwise, derive the baseline per *Comparison methodology* — `expected_iterations × baseline_model_cost_per_turn`, with a manual turn priced through the same dispatch-size estimator — and state the iteration count and the baseline model the section assumed, so a reader can disagree with the assumption rather than only with the answer. A per-turn or per-phase breakdown may be added below it and never in place of it. Carry the estimates-only disclaimer, the calibration factor, and the observation count on both the ledger and the comparison. When any row resolved to `unknown`, say so rather than presenting a confident-looking model name.
+
+**Compute the total by adding the rows just written, column by column — never by estimating it.** Then verify: each column of the total row equals the sum of that column's rows, and the figure quoted in the comparison prose is the *same number* as the table's total. A ledger whose total disagrees with its own rows, or whose prose quotes a different total than its table, is self-refuting.

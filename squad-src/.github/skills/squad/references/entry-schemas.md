@@ -10,7 +10,7 @@ metadata:
 
 # Entry Schemas
 
-The shapes the Squad Scribe writes on an ordinary turn. Initialization is outside admission. Before later work dispatch, Cost Preflight is the one exception: the coordinator appends its decision and compare-and-swap updates only `currentRun.costPreflight`, then reads both back. Every later write remains Scribe-owned.
+The shapes the Squad Scribe writes on an ordinary turn. Initialization is outside admission. Before later work dispatch, Cost Preflight is the one exception: the coordinator appends its decision and compare-and-swap updates only `currentRun.costPreflight`, then reads both back. Every later write remains Scribe-owned, except that `scripts/Write-SquadHandoff.ps1` writes these same shapes for an ordinary hand-off the coordinator runs with `pwsh` 7+; its `Squad Scribe.md` entry records no Scribe dispatch.
 
 These schemas are separate from [seed-templates.md](seed-templates.md), which stamps `team.md` and `routing.md` once during Init: every file below is written or appended to repeatedly for the life of a squad, so the Scribe reads this file on every turn while it reads the seed templates only when it is actually seeding.
 
@@ -116,7 +116,7 @@ Field order is contractual and every numeric field is a bare number. The block r
 * **Route rationale** — <assignment class, rank/override source, floor applied, `identity-mismatch:` token when applicable>
 ```
 
-These bullets are additive and never a new JSON key — the closed ten-field block above is unchanged whether or not they are present. Omit all four entirely when no routing policy applied to this dispatch: a no-policy entry keeps exactly the block shape above with nothing beneath it.
+These bullets are additive and never a new JSON key — the closed ten-field block above is unchanged whether or not they are present. Omit all four when no routing policy or bounded pick applied: such an entry keeps exactly the block shape above with nothing beneath it.
 
 When Cost Preflight is configured, the `Cost Preflight Ref` and `Cost Preflight Slot` pair is also unique across history. One admitted slot authorizes one dispatch; a second entry carrying the same run, round, and slot is a replay and must be rejected before any write.
 

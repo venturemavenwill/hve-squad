@@ -60,6 +60,7 @@ BeforeAll {
             $cmdParts.Add("-SquadRoot '$SquadRoot'")
             if ($Check) { $cmdParts.Add('-Check') }
             if ($Format) { $cmdParts.Add("-Format '$Format'") }
+            if ($BaselinePath) { $cmdParts.Add("-BaselinePath '$BaselinePath'") }
             $cmdParts.Add("-ExpectedHistoryCounts $countsLiteral")
             $command = $cmdParts -join ' '
             $output = & pwsh -NoProfile -Command $command 2>&1 | Out-String
@@ -489,6 +490,23 @@ description: "Append-only dispatch history for a single squad agent"
         $result = Invoke-Ledger -SquadRoot $script:UnresolvedRoot -Format markdown
         $result.Output | Should -Match '(?m)^\|\s*challenger\s*\|\s*Epsilon\s*\|\s*Squad Challenger\s*\|\s*unknown\s*\|\s*unresolved\s*\|\s*Claude Sonnet 4\.6\s*\|\s*default\s*\|\s*$'
         $result.Output | Should -Not -Match '(?m)^\|\s*challenger\s*\|.*\|\s*Claude Sonnet 4\.6\s*\|\s*unresolved\s*\|'
+    }
+}
+
+Describe 'Measure-SquadLedger roster lookup accepts the drifted primary-agent headers' {
+    It 'resolves role, member and tier for Attribution rows when the roster is headed Primary, Primary Agent or Agent' -ForEach @(
+        @{ Header = 'Primary' }
+        @{ Header = 'Primary Agent' }
+        @{ Header = 'Agent' }
+    ) {
+        $root = Join-Path $TestDrive "roster-header-$($Header -replace '\W', '')"
+        Copy-Item -LiteralPath (Join-Path $script:FixtureRoot 'applied') -Destination $root -Recurse
+        $teamPath = Join-Path $root 'team.md'
+        $drifted = (Get-Content -LiteralPath $teamPath -Raw) -replace 'Agent Name \(Primary\)', $Header
+        $drifted | Should -Not -Match 'Agent Name \(Primary\)'
+        Set-Content -LiteralPath $teamPath -Value $drifted -NoNewline
+        $result = Invoke-Ledger -SquadRoot $root -Format markdown
+        $result.Output | Should -Match '(?m)^\|\s*researcher\s*\|\s*Alpha\s*\|\s*Squad Researcher\s*\|.*\|\s*default\s*\|\s*$'
     }
 }
 
@@ -1167,6 +1185,262 @@ Describe 'Measure-SquadLedger -EmitBaseline / -BaselinePath (U1 item 1)' {
     }
 }
 
+# Coordinator Step 7: the post-write enumeration alone is self-referential. A Scribe that drops
+# an entry and rewrites a ledger consistent with the new history passes a count-only -Check, so
+# the verifying call pairs -ExpectedHistoryCounts (pre-handoff count + requested entries) with
+# the -BaselinePath emitted before the hand-off.
+Describe 'Measure-SquadLedger pre-handoff baseline plus expected counts catches a dropped entry (coordinator Step 7)' {
+    BeforeAll {
+        function Initialize-PreHandoffLocal {
+            $root = New-BaselineTestRootLocal
+            (Invoke-Ledger -SquadRoot $root -Write).ExitCode | Should -Be 0
+            $bp = Join-Path $TestDrive ([System.Guid]::NewGuid().ToString('N') + '.json')
+            (Invoke-Ledger -SquadRoot $root -EmitBaseline $bp).ExitCode | Should -Be 0
+            [pscustomobject]@{ Root = $root; Baseline = $bp; History = Join-Path $root 'history\Squad Researcher.md' }
+        }
+
+        function Get-ResearcherEntryLocal {
+            param([string]$Stamp)
+            @"
+
+### $Stamp Follow-up pass $Stamp
+
+* Turn: 3
+* Request: Follow up.
+* Deliverable: ``research/2026-09-27-fixture-topic.md``
+* Outcome: Done.
+
+#### Consumption
+
+``````json
+{
+  "model": "Claude Sonnet 4.6",
+  "model_source": "session-inherited",
+  "priced_as": "Claude Sonnet 4.6",
+  "model_tier": "default",
+  "internal_turns": 2,
+  "input_tokens": 1000,
+  "cached_tokens": 4000,
+  "cache_write_tokens": 500,
+  "output_tokens": 1500,
+  "basis": "estimated"
+}
+``````
+"@
+        }
+
+        function Update-LedgerConsistentLocal {
+            # Models a Scribe that rewrote consumption.md to match its own history: forget the
+            # recorded identities, then -Write re-derives a ledger that agrees with disk.
+            param([string]$Root)
+            $ledger = Join-Path $Root 'consumption.md'
+            $stripped = (Get-Content -LiteralPath $ledger -Raw) -replace ' — identities: [^\r\n]*', ''
+            Set-Content -LiteralPath $ledger -Value $stripped -NoNewline
+            (Invoke-Ledger -SquadRoot $Root -Write).ExitCode | Should -Be 0
+        }
+    }
+
+    It 'a dropped (replaced) entry with an internally consistent ledger passes the self-referential count but FAILS against the baseline and the pre-handoff-plus-payload counts' {
+        $s = Initialize-PreHandoffLocal
+        $original = Get-Content -LiteralPath $s.History -Raw
+        $head = $original.Substring(0, $original.IndexOf('### 2026-09-27T10:00:00Z'))
+        Set-Content -LiteralPath $s.History -Value ($head.TrimEnd() + "`n" + (Get-ResearcherEntryLocal -Stamp '2026-09-28T10:00:00Z')) -NoNewline
+        Update-LedgerConsistentLocal -Root $s.Root
+
+        $selfRef = Invoke-Ledger -SquadRoot $s.Root -Check -ExpectedHistoryCounts @{ 'Squad Researcher' = 1; 'Squad Scribe' = 1 }
+        $selfRef.ExitCode | Should -Be 0 -Because $selfRef.Output
+
+        $paired = Invoke-Ledger -SquadRoot $s.Root -Check -BaselinePath $s.Baseline -ExpectedHistoryCounts @{ 'Squad Researcher' = 2; 'Squad Scribe' = 1 }
+        $paired.ExitCode | Should -Be 1
+        $paired.Output | Should -Match 'original content changed|shrank'
+        $paired.Output | Should -Match "History entry count for 'Squad Researcher': expected 2, found 1"
+    }
+
+    It 'a valid append of two entries to one agent passes, and fails when the expected count omits one of them' {
+        $s = Initialize-PreHandoffLocal
+        Add-Content -LiteralPath $s.History -Value ((Get-ResearcherEntryLocal -Stamp '2026-09-28T10:00:00Z') + (Get-ResearcherEntryLocal -Stamp '2026-09-28T11:00:00Z')) -NoNewline
+        (Invoke-Ledger -SquadRoot $s.Root -Write).ExitCode | Should -Be 0
+
+        $ok = Invoke-Ledger -SquadRoot $s.Root -Check -BaselinePath $s.Baseline -ExpectedHistoryCounts @{ 'Squad Researcher' = 3; 'Squad Scribe' = 1 }
+        $ok.ExitCode | Should -Be 0 -Because $ok.Output
+
+        $short = Invoke-Ledger -SquadRoot $s.Root -Check -BaselinePath $s.Baseline -ExpectedHistoryCounts @{ 'Squad Researcher' = 2; 'Squad Scribe' = 1 }
+        $short.ExitCode | Should -Be 1
+        $short.Output | Should -Match "History entry count for 'Squad Researcher': expected 2, found 3"
+    }
+
+    It 'a hand-off that never ran -Write (history appended, ledger stale) fails the paired check' {
+        $s = Initialize-PreHandoffLocal
+        Add-Content -LiteralPath $s.History -Value (Get-ResearcherEntryLocal -Stamp '2026-09-28T10:00:00Z') -NoNewline
+        $skipped = Invoke-Ledger -SquadRoot $s.Root -Check -BaselinePath $s.Baseline -ExpectedHistoryCounts @{ 'Squad Researcher' = 2; 'Squad Scribe' = 1 }
+        $skipped.ExitCode | Should -Be 1
+    }
+}
+
+# Operating-procedure "Hand-off Ledger Verification" steps 1-2: expected counts are `###` entry
+# counts read immediately before the hand-off (never the baseline's `##`+`###` headingCount),
+# `Squad Scribe` gains exactly +1 for its own orchestration entry, and the baseline is emitted
+# after the stage's own role edits. These pin the tool's behavior for that wording; they are not
+# a proof that a live coordinator follows it.
+Describe 'Measure-SquadLedger expected-count derivation (operating-procedure Hand-off Ledger Verification)' {
+    BeforeAll {
+        function Get-EntryCountLocal {
+            param([string]$Path)
+            if (-not (Test-Path -LiteralPath $Path)) { return 0 }
+            @([regex]::Matches((Get-Content -LiteralPath $Path -Raw), '(?m)^###[ \t]+\S')).Count
+        }
+
+        function Get-EntryTextLocal {
+            param([string]$Stamp, [string]$Kind = 'Researcher')
+            $label = if ($Kind -eq 'Scribe') { 'Consumption — Orchestration' } else { 'Consumption' }
+            $model = if ($Kind -eq 'Scribe') { '"Claude Haiku 4.5"' } else { '"Claude Sonnet 4.6"' }
+            $source = if ($Kind -eq 'Scribe') { 'agent-pinned' } else { 'session-inherited' }
+            @"
+
+### $Stamp $Kind entry $Stamp
+
+* Turn: 3
+* Request: Hand-off.
+* Deliverable: ``decisions.md``
+* Outcome: Done.
+
+#### $label
+
+``````json
+{
+  "model": $model,
+  "model_source": "$source",
+  "priced_as": $model,
+  "model_tier": "default",
+  "internal_turns": 2,
+  "input_tokens": 1000,
+  "cached_tokens": 4000,
+  "cache_write_tokens": 500,
+  "output_tokens": 1500,
+  "basis": "estimated"
+}
+``````
+"@
+        }
+
+        function New-HandoffRootLocal {
+            param([switch]$WithRunHistory, [string[]]$ProtectedPath)
+            $root = New-BaselineTestRootLocal
+            if ($WithRunHistory) {
+                Set-Content -LiteralPath (Join-Path $root 'history\autopilot-run-r1.md') -Value "# Autopilot run r1`n`n## Stage 1`n`n* Done.`n`n## Stage 2`n`n* Done.`n"
+            }
+            (Invoke-Ledger -SquadRoot $root -Write).ExitCode | Should -Be 0
+            $root
+        }
+
+        function Add-HandoffEntriesLocal {
+            param([string]$Root, [int]$Researcher, [int]$Scribe, [string]$Day = '2026-09-28')
+            $r = ''; $s = ''
+            for ($i = 1; $i -le $Researcher; $i++) { $r += Get-EntryTextLocal -Stamp "${Day}T1${i}:00:00Z" }
+            for ($i = 1; $i -le $Scribe; $i++) { $s += Get-EntryTextLocal -Stamp "${Day}T2${i}:00:00Z" -Kind 'Scribe' }
+            if ($r) { Add-Content -LiteralPath (Join-Path $Root 'history\Squad Researcher.md') -Value $r -NoNewline }
+            if ($s) { Add-Content -LiteralPath (Join-Path $Root 'history\Squad Scribe.md') -Value $s -NoNewline }
+            (Invoke-Ledger -SquadRoot $Root -Write).ExitCode | Should -Be 0
+        }
+    }
+
+    It 'R1: ### counts pass for a valid hand-off while autopilot-run history carries ## sections; the baseline headingCount would fail it' {
+        $root = New-HandoffRootLocal -WithRunHistory
+        $bp = Join-Path $TestDrive 'r1-baseline.json'
+        (Invoke-Ledger -SquadRoot $root -EmitBaseline $bp).ExitCode | Should -Be 0
+        $base = Get-Content -LiteralPath $bp -Raw | ConvertFrom-Json
+        $runKey = @($base.appendOnly.PSObject.Properties.Name | Where-Object { $_ -match 'autopilot-run-r1' })[0]
+        $runKey | Should -Not -BeNullOrEmpty
+        $base.appendOnly.$runKey.headingCount | Should -Be 2
+        $hist = Join-Path $root 'history'
+        $pre = @{
+            'autopilot-run-r1' = Get-EntryCountLocal -Path (Join-Path $hist 'autopilot-run-r1.md')
+            'Squad Researcher' = Get-EntryCountLocal -Path (Join-Path $hist 'Squad Researcher.md')
+            'Squad Scribe'     = Get-EntryCountLocal -Path (Join-Path $hist 'Squad Scribe.md')
+        }
+        $pre['autopilot-run-r1'] | Should -Be 0
+
+        Add-HandoffEntriesLocal -Root $root -Researcher 1 -Scribe 1
+
+        $ok = Invoke-Ledger -SquadRoot $root -Check -BaselinePath $bp -ExpectedHistoryCounts @{ 'autopilot-run-r1' = $pre['autopilot-run-r1']; 'Squad Researcher' = $pre['Squad Researcher'] + 1; 'Squad Scribe' = $pre['Squad Scribe'] + 1 }
+        $ok.ExitCode | Should -Be 0 -Because $ok.Output
+
+        $bad = Invoke-Ledger -SquadRoot $root -Check -BaselinePath $bp -ExpectedHistoryCounts @{ 'autopilot-run-r1' = $base.appendOnly.$runKey.headingCount; 'Squad Researcher' = $pre['Squad Researcher'] + 1; 'Squad Scribe' = $pre['Squad Scribe'] + 1 }
+        $bad.ExitCode | Should -Be 1
+        $bad.Output | Should -Match "History entry count for 'autopilot-run-r1': expected 2, found 0"
+    }
+
+    It 'R2: prior Scribe entry + 2 Researcher entries + Scribe orchestration passes at Scribe +1 exactly' {
+        $root = New-HandoffRootLocal
+        $bp = Join-Path $TestDrive 'r2-ok.json'
+        (Invoke-Ledger -SquadRoot $root -EmitBaseline $bp).ExitCode | Should -Be 0
+        $hist = Join-Path $root 'history'
+        $preR = Get-EntryCountLocal -Path (Join-Path $hist 'Squad Researcher.md')
+        $preS = Get-EntryCountLocal -Path (Join-Path $hist 'Squad Scribe.md')
+        $preS | Should -Be 1
+        Add-HandoffEntriesLocal -Root $root -Researcher 2 -Scribe 1
+        $ok = Invoke-Ledger -SquadRoot $root -Check -BaselinePath $bp -ExpectedHistoryCounts @{ 'Squad Researcher' = $preR + 2; 'Squad Scribe' = $preS + 1 }
+        $ok.ExitCode | Should -Be 0 -Because $ok.Output
+        $literal = Invoke-Ledger -SquadRoot $root -Check -BaselinePath $bp -ExpectedHistoryCounts @{ 'Squad Researcher' = $preR + 2; 'Squad Scribe' = $preS }
+        $literal.ExitCode | Should -Be 1
+        $literal.Output | Should -Match "History entry count for 'Squad Scribe': expected 1, found 2"
+    }
+
+    It 'R2: a missing Scribe orchestration entry fails against Scribe +1 (expected 2, found 1)' {
+        $root = New-HandoffRootLocal
+        $bp = Join-Path $TestDrive 'r2-missing.json'
+        (Invoke-Ledger -SquadRoot $root -EmitBaseline $bp).ExitCode | Should -Be 0
+        Add-HandoffEntriesLocal -Root $root -Researcher 2 -Scribe 0
+        $r = Invoke-Ledger -SquadRoot $root -Check -BaselinePath $bp -ExpectedHistoryCounts @{ 'Squad Researcher' = 3; 'Squad Scribe' = 2 }
+        $r.ExitCode | Should -Be 1
+        $r.Output | Should -Match "History entry count for 'Squad Scribe': expected 2, found 1"
+    }
+
+    It 'R2: a duplicated Scribe orchestration entry fails against Scribe +1 (expected 2, found 3)' {
+        $root = New-HandoffRootLocal
+        $bp = Join-Path $TestDrive 'r2-dup.json'
+        (Invoke-Ledger -SquadRoot $root -EmitBaseline $bp).ExitCode | Should -Be 0
+        Add-HandoffEntriesLocal -Root $root -Researcher 2 -Scribe 2
+        $r = Invoke-Ledger -SquadRoot $root -Check -BaselinePath $bp -ExpectedHistoryCounts @{ 'Squad Researcher' = 3; 'Squad Scribe' = 2 }
+        $r.ExitCode | Should -Be 1
+        $r.Output | Should -Match "History entry count for 'Squad Scribe': expected 2, found 3"
+    }
+
+    It 'R3: a baseline emitted before the role''s edit to a protected deliverable fails; emitted immediately before the hand-off it passes' {
+        $rel = 'research/2026-09-27-fixture-topic.md'
+        $stale = New-HandoffRootLocal
+        $staleBp = Join-Path $TestDrive 'r3-stale.json'
+        (Invoke-Ledger -SquadRoot $stale -EmitBaseline $staleBp -ProtectedPath $rel).ExitCode | Should -Be 0
+        Add-Content -LiteralPath (Join-Path $stale $rel) -Value "`nRole revision after the previous hand-off."
+        Add-HandoffEntriesLocal -Root $stale -Researcher 1 -Scribe 1
+        $bad = Invoke-Ledger -SquadRoot $stale -Check -BaselinePath $staleBp -ExpectedHistoryCounts @{ 'Squad Researcher' = 2; 'Squad Scribe' = 2 }
+        $bad.ExitCode | Should -Be 1
+        $bad.Output | Should -Match 'Protected artifact changed'
+
+        $fresh = New-HandoffRootLocal
+        Add-Content -LiteralPath (Join-Path $fresh $rel) -Value "`nRole revision after the previous hand-off."
+        $freshBp = Join-Path $TestDrive 'r3-fresh.json'
+        (Invoke-Ledger -SquadRoot $fresh -EmitBaseline $freshBp -ProtectedPath $rel).ExitCode | Should -Be 0
+        Add-HandoffEntriesLocal -Root $fresh -Researcher 1 -Scribe 1
+        $ok = Invoke-Ledger -SquadRoot $fresh -Check -BaselinePath $freshBp -ExpectedHistoryCounts @{ 'Squad Researcher' = 2; 'Squad Scribe' = 2 }
+        $ok.ExitCode | Should -Be 0 -Because $ok.Output
+    }
+
+    It 'R3: pipelining keeps -AllowedWritePath for Role(N+1)''s concurrent output (single Scribe writer) and fails without it' {
+        $rel = 'research/2026-09-27-fixture-topic.md'
+        $root = New-HandoffRootLocal
+        $bp = Join-Path $TestDrive 'r3-pipe.json'
+        (Invoke-Ledger -SquadRoot $root -EmitBaseline $bp -ProtectedPath $rel).ExitCode | Should -Be 0
+        Add-Content -LiteralPath (Join-Path $root $rel) -Value "`nRole(N+1) output written alongside the Scribe call."
+        Add-HandoffEntriesLocal -Root $root -Researcher 1 -Scribe 1
+        $with = Invoke-Ledger -SquadRoot $root -Check -BaselinePath $bp -AllowedWritePath $rel
+        $with.ExitCode | Should -Be 0 -Because $with.Output
+        $without = Invoke-Ledger -SquadRoot $root -Check -BaselinePath $bp
+        $without.ExitCode | Should -Be 1
+        $without.Output | Should -Match 'Protected artifact changed'
+    }
+}
+
 # ---------------------------------------------------------------------------
 # U1 (Amendment 3 §2 item 2): -LookupRunId/-LookupTopic/-LookupStage/-LookupSlot
 # key-lookup mode. A model-free existence check for resume logic: a literal
@@ -1660,6 +1934,154 @@ Describe 'Measure-SquadLedger names an insert-above-the-end as an ordering defec
         $result.ExitCode | Should -Be 1
         $result.Output | Should -Match "entries were inserted inside the file, not appended: 'history/Squad Researcher\.md' keeps every original byte"
         $result.Output | Should -Not -Match 'a prefix edit, not only an append'
+    }
+}
+
+Describe 'Measure-SquadLedger -ExpectedHistoryCounts accepts a string that survives pwsh -File' {
+    BeforeAll {
+        function Invoke-LedgerFileCountsLocal {
+            param([string]$Root, [string]$Counts)
+            $output = & pwsh -NoProfile -File $script:LedgerScript -SquadRoot $Root -Check -ExpectedHistoryCounts $Counts 2>&1 | Out-String
+            [pscustomobject]@{ ExitCode = $LASTEXITCODE; Output = $output }
+        }
+
+        function New-WrittenRootLocal {
+            $root = New-BaselineTestRootLocal
+            (Invoke-Ledger -SquadRoot $root -Write).ExitCode | Should -Be 0
+            $root
+        }
+    }
+
+    It 'passes a semicolon string with the correct counts' {
+        $r = Invoke-LedgerFileCountsLocal -Root (New-WrittenRootLocal) -Counts 'Squad Researcher=1;Squad Scribe=1'
+        $r.ExitCode | Should -Be 0 -Because $r.Output
+    }
+
+    It 'passes a comma string, a .md key, and a JSON object string' {
+        $root = New-WrittenRootLocal
+        (Invoke-LedgerFileCountsLocal -Root $root -Counts 'Squad Researcher=1, Squad Scribe.md=1').ExitCode | Should -Be 0
+        (Invoke-LedgerFileCountsLocal -Root $root -Counts '{"Squad Researcher":1,"Squad Scribe":1}').ExitCode | Should -Be 0
+    }
+
+    It 'fails with the mismatch when a string count is wrong' {
+        $r = Invoke-LedgerFileCountsLocal -Root (New-WrittenRootLocal) -Counts 'Squad Researcher=2;Squad Scribe=1'
+        $r.ExitCode | Should -Be 1
+        $r.Output | Should -Match "History entry count for 'Squad Researcher': expected 2, found 1"
+    }
+
+    It 'rejects an unparseable string with a clear error and a nonzero exit' {
+        $r = Invoke-LedgerFileCountsLocal -Root (New-BaselineTestRootLocal) -Counts 'Squad Researcher is one'
+        $r.ExitCode | Should -Not -Be 0
+        $r.Output | Should -Match "is not 'Agent Name=<count>'"
+    }
+
+    It 'rejects a duplicate agent name in the string and JSON forms with exit 1' {
+        $root = New-WrittenRootLocal
+        foreach ($counts in 'Squad Researcher=2;Squad Researcher=1', 'Squad Researcher=1;Squad Researcher.md=1', '{"Squad Researcher":1,"Squad Researcher":2}') {
+            $r = Invoke-LedgerFileCountsLocal -Root $root -Counts $counts
+            $r.ExitCode | Should -Be 1 -Because "$counts :: $($r.Output)"
+            $r.Output | Should -Match 'more than once|not valid' -Because $counts
+        }
+    }
+
+    It 'rejects an empty or blank string with exit 1' {
+        $root = New-WrittenRootLocal
+        foreach ($counts in '', '   ') {
+            $r = Invoke-LedgerFileCountsLocal -Root $root -Counts $counts
+            $r.ExitCode | Should -Be 1 -Because "'$counts' :: $($r.Output)"
+            $r.Output | Should -Match 'is blank'
+        }
+    }
+}
+
+Describe 'Measure-SquadLedger -SessionLog auto picks the newest matching session without reading older ones' {
+    BeforeAll {
+        function Invoke-AutoLocal {
+            param([string]$Root, [string]$CopilotHome, [string]$SessionId)
+            $pre = "`$env:COPILOT_HOME = '$CopilotHome'; Remove-Item Env:COPILOT_AGENT_SESSION_ID -ErrorAction SilentlyContinue;"
+            if ($SessionId) { $pre += " `$env:COPILOT_AGENT_SESSION_ID = '$SessionId';" }
+            $out = & pwsh -NoProfile -Command "$pre & '$script:LedgerScript' -SquadRoot '$Root' -SessionLog auto -Format json" 2>&1 | Out-String
+            $text = ($out -split '\r?\n' | Where-Object { $_ -notmatch '^(WARNING|AVERTISSEMENT)' }) -join "`n"
+            [pscustomobject]@{ Output = $out; Json = ($text | ConvertFrom-Json -ErrorAction SilentlyContinue) }
+        }
+
+        function Get-SessionIdLocal { param([int]$Index) '00000000-0000-0000-0000-{0:D12}' -f $Index }
+
+        # 200 GUID-named sessions, all matching this repo; session N is written N minutes after the first.
+        function New-ManySessionsLocal {
+            $repo = Join-Path $TestDrive ([System.Guid]::NewGuid().ToString('N'))
+            $root = Join-Path $repo '.copilot-tracking/squad'
+            New-Item -ItemType Directory -Path (Split-Path -Parent $root) -Force | Out-Null
+            Copy-Item -LiteralPath (Join-Path $script:FixtureRoot 'applied') -Destination $root -Recurse
+            $home_ = Join-Path $repo '_home'
+            $state = Join-Path $home_ 'session-state'
+            $event = '{"type":"subagent.completed","data":{"toolCallId":"t1","agentName":"Squad Researcher","model":"claude-sonnet-4.6","totalTokens":1000,"durationMs":1},"timestamp":"2026-10-01T10:00:00.000Z"}'
+            $base = [datetime]::UtcNow.AddHours(-10)
+            for ($i = 0; $i -lt 200; $i++) {
+                $d = Join-Path $state (Get-SessionIdLocal $i)
+                New-Item -ItemType Directory -Path $d -Force | Out-Null
+                Set-Content -LiteralPath (Join-Path $d 'workspace.yaml') -Value "cwd: $repo`n"
+                Set-Content -LiteralPath (Join-Path $d 'events.jsonl') -Value $event
+                (Get-Item -LiteralPath (Join-Path $d 'events.jsonl')).LastWriteTimeUtc = $base.AddMinutes($i)
+            }
+            [pscustomobject]@{ Repo = $repo; Root = $root; Home = $home_; State = $state; Event = $event }
+        }
+    }
+
+    It 'returns the newest matching session without reading older workspace.yaml files (held open exclusively)' {
+        $f = New-ManySessionsLocal
+        # An exclusive handle makes any read of an older workspace.yaml throw, so a full scan fails.
+        $locks = foreach ($i in 0..189) {
+            [System.IO.File]::Open((Join-Path (Join-Path $f.State (Get-SessionIdLocal $i)) 'workspace.yaml'), 'Open', 'Read', 'None')
+        }
+        try { $r = Invoke-AutoLocal -Root $f.Root -CopilotHome $f.Home }
+        finally { foreach ($l in $locks) { $l.Dispose() } }
+        $r.Json.observed.sessionId | Should -Be (Get-SessionIdLocal 199) -Because $r.Output
+    }
+
+    It 'skips a newer session for another repository and takes the newest matching one' {
+        $f = New-ManySessionsLocal
+        Set-Content -LiteralPath (Join-Path $f.State (Join-Path (Get-SessionIdLocal 199) 'workspace.yaml')) -Value "cwd: C:\elsewhere`n"
+        $r = Invoke-AutoLocal -Root $f.Root -CopilotHome $f.Home
+        $r.Json.observed.sessionId | Should -Be (Get-SessionIdLocal 198) -Because $r.Output
+    }
+
+    It 'prefers COPILOT_AGENT_SESSION_ID when it is a GUID session of this repository' {
+        $f = New-ManySessionsLocal
+        $r = Invoke-AutoLocal -Root $f.Root -CopilotHome $f.Home -SessionId (Get-SessionIdLocal 195)
+        $r.Json.observed.sessionId | Should -Be (Get-SessionIdLocal 195) -Because $r.Output
+    }
+
+    It 'ignores a COPILOT_AGENT_SESSION_ID whose session belongs to another repository' {
+        $f = New-ManySessionsLocal
+        Set-Content -LiteralPath (Join-Path $f.State (Join-Path (Get-SessionIdLocal 150) 'workspace.yaml')) -Value "cwd: C:\elsewhere`n"
+        $r = Invoke-AutoLocal -Root $f.Root -CopilotHome $f.Home -SessionId (Get-SessionIdLocal 150)
+        $r.Json.observed.sessionId | Should -Be (Get-SessionIdLocal 199) -Because $r.Output
+    }
+
+    It 'ignores a COPILOT_AGENT_SESSION_ID of ".." even when the parent holds a matching events.jsonl' {
+        $f = New-ManySessionsLocal
+        Set-Content -LiteralPath (Join-Path $f.Home 'workspace.yaml') -Value "cwd: $($f.Repo)`n"
+        Set-Content -LiteralPath (Join-Path $f.Home 'events.jsonl') -Value $f.Event
+        $r = Invoke-AutoLocal -Root $f.Root -CopilotHome $f.Home -SessionId '..'
+        $r.Json.observed.sessionId | Should -Be (Get-SessionIdLocal 199) -Because $r.Output
+    }
+
+    It 'ignores a malformed (non-GUID) COPILOT_AGENT_SESSION_ID even when that directory matches' {
+        $f = New-ManySessionsLocal
+        $d = Join-Path $f.State 'not-a-guid'
+        New-Item -ItemType Directory -Path $d -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $d 'workspace.yaml') -Value "cwd: $($f.Repo)`n"
+        Set-Content -LiteralPath (Join-Path $d 'events.jsonl') -Value $f.Event
+        (Get-Item -LiteralPath (Join-Path $d 'events.jsonl')).LastWriteTimeUtc = [datetime]::UtcNow.AddHours(-20)
+        $r = Invoke-AutoLocal -Root $f.Root -CopilotHome $f.Home -SessionId 'not-a-guid'
+        $r.Json.observed.sessionId | Should -Be (Get-SessionIdLocal 199) -Because $r.Output
+    }
+
+    It 'falls back to the scan when COPILOT_AGENT_SESSION_ID names no session' {
+        $f = New-ManySessionsLocal
+        $r = Invoke-AutoLocal -Root $f.Root -CopilotHome $f.Home -SessionId '11111111-1111-1111-1111-111111111111'
+        $r.Json.observed.sessionId | Should -Be (Get-SessionIdLocal 199) -Because $r.Output
     }
 }
 

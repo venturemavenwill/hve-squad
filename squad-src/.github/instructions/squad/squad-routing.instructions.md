@@ -117,7 +117,7 @@ Eleven rows never survive the initial filter in most projects, because no profil
 ## Dispatch Rules
 
 * Match the most specific pattern first. When several patterns match, prefer the one whose role most directly owns the requested outcome.
-* Dispatch all parallel-eligible roles for a turn concurrently; run non-parallel roles (such as planning and implementation) sequentially.
+* Dispatch all parallel-eligible roles for a turn concurrently; run non-parallel roles (such as planning and implementation) sequentially. In interactive mode only (no `mode=`), owners may also run concurrently when the Lead plan's `Implement Shape` is `deliverable-fan-out` (or a bounded request lists independent items) and their write sets are disjoint, shown by the plan or request and never by budget; the routing tier's confirmation is obtained once for the batch, listing every owner, its tier, and its write set, and an `escalate`-tier owner is never batched. Scribe single-writer and per-stage history are unchanged (see *Plan-Driven Parallelism* in `references/gates-and-modes.md`).
 * Resolve every matched role through the roster before dispatch. If a role maps to **thin charter needed**, escalate rather than guessing a substitute.
 * Apply cost-first model selection: prefer the `fast` tier for read-heavy `auto` roles and reserve the `default` tier for reasoning-heavy `confirm` roles.
 
@@ -161,7 +161,7 @@ The coordinator first confirms the methodology artifacts exist on disk. Implemen
 * A plan artifact exists under `.copilot-tracking/plans/` for the topic. If missing, dispatch `lead` (planning) first.
 * A non-`Stop` Council Verdict exists for the topic when the request crosses two or more council-member domains. If missing, run the council row first.
 
-When any precondition is unmet, the coordinator dispatches the missing stage (or escalates) instead of implementing. It never produces the missing research, plan, or verdict itself. With the preconditions met, the gate behavior is:
+When any precondition is unmet, the coordinator dispatches the missing stage (or escalates) instead of implementing. It never produces the missing research, plan, or verdict itself. The one exception is the **bounded lane** (*Bounded Lane* in `references/gates-and-modes.md`): interactive mode only (no `mode=`), when the request names the exact files and change, has no open questions, has one owning role (or independent disjoint-write-set items), crosses no council domain, and trips no Impactful-Action, Risk, intake, or discovery gate, the research and plan preconditions are waived. Any doubt or `pipeline=full` means the full pipeline; the owning role is still dispatched, never inline, `tester` still closes, and the Scribe records `Route: bounded` and its bounded model pick (*Bounded Lane Pick* in `references/model-routing.md`). With the preconditions met, the gate behavior is:
 
 * When no Council Verdict exists for the topic and the request crosses two or more council-member domains (architecture, security, cost, product-fit, RAI), the coordinator runs the council row before the implementer.
 * When the latest verdict is `Go` or `Go-With-Conditions`, the coordinator dispatches the implementer and passes the consolidated conditions as inputs.

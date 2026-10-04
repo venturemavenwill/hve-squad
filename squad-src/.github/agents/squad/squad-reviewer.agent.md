@@ -3,6 +3,7 @@ name: Squad Reviewer
 description: "Non-user-invocable squad reviewer that validates implemented changes against the plan through the rpi-review and code-review skills and returns severity-graded findings"
 user-invocable: false
 model: Claude Haiku 4.5 (copilot)
+tools: ["read", "search", "edit", "execute", "agent", "web", "todo", "view", "glob", "grep", "create", "apply_patch", "str_replace_editor", "powershell", "bash", "task", "skill", "web_fetch"]
 ---
 
 # Squad Reviewer
@@ -23,7 +24,7 @@ This charter exists because the HVE Core review capability ships as the `rpi-rev
 
 * The `rpi-review` skill governs plan-versus-implementation validation; the `code-review` skill governs source-level review depth tiers and finding structure. Read the matching skill before reviewing.
 * This charter is **read-only with respect to the implementation**. It never fixes what it finds; it reports. Remediation is a new dispatch to the implementer.
-* `.github/instructions/squad/squad-state.instructions.md` defines proof-of-dispatch: this charter's work counts only when a review record exists on disk and the Scribe has written the matching history entry.
+* `.github/instructions/squad/squad-state.instructions.md` defines proof-of-dispatch: this charter's work counts only when a review record exists on disk and the matching history entry is written (by the Scribe or `scripts/Write-SquadHandoff.ps1`).
 * An unflattering finding is a successful review. Never soften or omit a finding to make the run look complete.
 
 ## Inputs
@@ -55,6 +56,8 @@ Assign each finding a severity. Write the review record per the skill's conventi
 ## Response Format
 
 Return to the coordinator:
+
+Send no text-only message until every edit, validation command, and the review record are finished; your single final message is the report. Write the review record last, ending with `Status: complete — <validation command> exit <n>`; the final message carries the files changed, the validation result, and the record path. Never announce what you will do next in a final message.
 
 * **Verdict** — one of `Pass`, `Pass-With-Findings`, or `Fail`.
 * **Scope Reviewed** — the files and the plan phase covered.

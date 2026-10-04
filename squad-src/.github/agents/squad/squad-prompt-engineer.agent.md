@@ -22,7 +22,7 @@ This charter exists because HVE Core ships prompt authoring as the `prompt-build
 
 * `.github/instructions/prompt-builder.instructions.md` is the authoring standard for every `.prompt.md`, `.agent.md`, `.instructions.md`, and `SKILL.md` file this charter touches.
 * The selected skill governs the phase loop; do not improvise a shorter one.
-* `.github/instructions/squad/squad-state.instructions.md` defines proof-of-dispatch: this charter's work counts only when its artifact exists on disk and the Scribe has written the matching history entry.
+* `.github/instructions/squad/squad-state.instructions.md` defines proof-of-dispatch: this charter's work counts only when its artifact exists on disk and the matching history entry is written (by the Scribe or `scripts/Write-SquadHandoff.ps1`).
 * Analysis output is written under `.copilot-tracking/prompts/`; authored and refactored artifacts are written to their real location in the repository.
 
 ## Inputs

@@ -10,13 +10,13 @@ metadata:
 
 # Scribe Payload Template
 
-This is the one payload shape both coordinators fill at hand-off. It replaces composing an ad hoc payload per turn: filling this template, in this section order, is what keeps a host's prompt cache warm across dispatches — the fixed instructional text at the top never changes turn to turn, so only the tail differs and only the tail needs re-encoding.
+This is the one payload shape both coordinators fill at hand-off, in this section order. The fixed top text never changes, keeping a host's prompt cache warm; only the tail differs.
 
-**Ordering is prose-only and cache-stable, never a JSON-field reorder.** Every JSON object below — most importantly the ten-field `#### Consumption` block — keeps the exact field order fixed in [entry-schemas.md](entry-schemas.md) and [scribe-procedure.md](scribe-procedure.md) Non-Negotiable Rules regardless of where the object sits in this template. Only the section-to-section prose order in this file is chosen for cache stability; a JSON object's own internal field order is a separate, unrelated contract and is never touched to achieve it.
+**Ordering is prose-only, never a JSON-field reorder.** Every JSON object below, most importantly the ten-field `#### Consumption` block, keeps the field order fixed in [entry-schemas.md](entry-schemas.md) and [scribe-procedure.md](scribe-procedure.md) Non-Negotiable Rules, wherever it sits in this template.
 
 ## 1. Invariant Instructions (Byte-Stable — Fill Nothing Here)
 
-Read, do not edit, this section on every dispatch. It is copied unmodified from turn to turn, which is what makes it the stable prefix a cache-aware host can reuse.
+Read, do not edit, this section on every dispatch; it is the stable prefix a cache-aware host reuses.
 
 ### 1.1 Payload Type
 
@@ -28,13 +28,13 @@ State the resolved `squadRoot` this payload targets. The default `.copilot-track
 
 ### 1.3 Run Identity
 
-State `run id`, `turn`, `stage` (when the run is autopilot or autonomous), and a `timestamp` in the format the target entry heading uses. These four identify which run and turn this payload belongs to and are carried into every entry, decision, and ledger row this dispatch writes.
+State `run id`, `turn`, `stage` (when the run is autopilot or autonomous), and a `timestamp` in the format the target entry heading uses. These four identify the run and turn and are carried into every entry, decision, and ledger row this dispatch writes.
 
 ### 1.4 History Records (When Payload Type Is `history`)
 
-For each dispatch this turn recorded, supply: the agent's `name:` frontmatter value verbatim (never slugified, never lowercased), the scoped request it received, its deliverable path and one-line outcome, and — when a ceiling is configured — its Cost Preflight Decision Ref and permitted slot. Each history record's consumption JSON follows immediately, in the fixed field order from [entry-schemas.md](entry-schemas.md): `model`, `model_source`, `priced_as`, `model_tier`, `internal_turns`, `input_tokens`, `cached_tokens`, `cache_write_tokens`, `output_tokens`, `basis`. Supply one consumption object per history record — never one without the other, per the `per-dispatch-history-and-consumption` rule.
+For each dispatch this turn recorded, supply: the agent's `name:` frontmatter value verbatim (never slugified, never lowercased), the scoped request it received, its deliverable path and one-line outcome, and — when a ceiling is configured — its Cost Preflight Decision Ref and permitted slot. Each history record's consumption JSON follows immediately, in the fixed field order from [entry-schemas.md](entry-schemas.md): `model`, `model_source`, `priced_as`, `model_tier`, `internal_turns`, `input_tokens`, `cached_tokens`, `cache_write_tokens`, `output_tokens`, `basis`. Supply one consumption object per history record — never one without the other, per the `per-dispatch-history-and-consumption` rule. Fill `model`/`model_source` from what the coordinator knows, never the Scribe's guess: the agent's frontmatter pin (`agent-pinned`), the dispatch's passed `model` (`cli-pinned`), or the host-reported one (`dispatch-reported`). Only the Scribe's own history entry uses its pin (`Claude Haiku 4.5`, `agent-pinned`); the coordinator's orchestration share is priced at its session model. `priced_as` is a rate-row name, never `orchestration-overhead`; `orchestration` is never a `model_source`.
 
-When a routing policy resolved this dispatch's model, also supply its `routingIdentity` values (`requestedModel`, `effectiveModel`, `observedModel`, `routeRationale`) so the Scribe can render the four identity bullets `entry-schemas.md` defines. Omit `routingIdentity` entirely when no policy applied — never emit it for a no-policy dispatch.
+When a routing policy or a bounded pick resolved this dispatch's model, also supply its `routingIdentity` values (`requestedModel`, `effectiveModel`, `observedModel`, `routeRationale`) so the Scribe can render the four identity bullets `entry-schemas.md` defines. Omit `routingIdentity` entirely when no policy applied — never emit it for a no-policy dispatch.
 
 ### 1.5 Decision Entries (When Payload Type Is `decision` or a Verdict)
 
@@ -50,7 +50,11 @@ State what the Scribe should find after writing: the number of history entries t
 
 ### 1.8 Ledger Command (Every Payload That Appends to `history/`)
 
-When the coordinator has a shell with `pwsh` 7+, supply `ledgerCommand`: the exact `-Write` command with the installed squad skill's absolute script path, as in the YAML below. The Scribe runs it verbatim as its last write and never hand-writes `consumption.md` rows or the two `currentRun` totals while it is supplied.
+When the coordinator has a shell with `pwsh` 7+, supply `ledgerCommand`: the exact `-Write` command with the installed squad skill's absolute script path, as in the YAML below. The Scribe runs it verbatim as its last write and never hand-writes `consumption.md` rows or the two `currentRun` totals when `pwsh` 7+ exists, supplied or not.
+
+### 1.9 Script Hand-off (Coordinator, Ordinary Payloads Only)
+
+With `pwsh` 7+, a `decision` or `history` payload is instead written by the coordinator through `scripts/Write-SquadHandoff.ps1` (no Scribe in flight; JSON keys and refusals in *Script Hand-off* in `operating-procedure.md`). Its orchestration block has no Scribe share: only the coordinator's turns at the session model, since no Scribe was dispatched.
 
 ## 2. Per-Dispatch Data (Volatile — Fill Every Turn)
 
@@ -62,6 +66,7 @@ squadRoot: <resolved path>
 runId: <id>
 turn: <n>
 stage: <stage name, autopilot/autonomous runs only>
+costPreflightReset: <not-requested | omit>
 timestamp: <ISO or the entry-heading format in use>
 historyRecords:
   - agent: <name: frontmatter value, verbatim>

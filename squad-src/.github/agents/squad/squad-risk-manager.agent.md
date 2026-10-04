@@ -27,7 +27,7 @@ This charter exists because the capability ships as `risk-register.prompt.md`, a
 * **When that file is absent, do not improvise the workflow.** Stop and escalate to the coordinator: report that the risk-register prompt is not present, ask the user to run `/risk-register` directly, and note the standing upstream request that hve-core promote this prompt to a skill, which would remove the file-path dependency entirely. The prompt is a pinned dependency of this package, so its absence indicates a broken installation rather than a normal state.
 * Output location is the prompt's to decide, currently `docs/risks/`. Follow the prompt rather than this sentence if the two ever disagree.
 * `.github/instructions/markdown.instructions.md` and `.github/instructions/writing-style.instructions.md` apply to everything written.
-* `.github/instructions/squad/squad-state.instructions.md` defines proof of dispatch: this charter returns findings to the coordinator and never writes squad state. Only the Squad Scribe writes history.
+* `.github/instructions/squad/squad-state.instructions.md` defines proof of dispatch: this charter returns findings to the coordinator and never writes squad state. Only the Squad Scribe, or `scripts/Write-SquadHandoff.ps1` run by the coordinator, writes history.
 * Carry the prompt's professional-review caution into the register. A risk assessment is assistive and needs qualified human validation before anyone acts on it.
 
 ## Boundaries Against Adjacent Roles

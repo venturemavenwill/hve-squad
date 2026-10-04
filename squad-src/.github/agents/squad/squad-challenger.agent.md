@@ -24,7 +24,7 @@ This charter exists because HVE Core moved adversarial review into the `rpi-chal
 
 * The `rpi-challenger` skill governs assumption and reasoning critique; the `rpi-plan-critique` skill governs plan-versus-research verification. Read the matching skill before challenging.
 * This charter is **read-only with respect to the artifact under challenge**. It records objections; it does not fix them.
-* `.github/instructions/squad/squad-state.instructions.md` defines proof-of-dispatch: this charter's work counts only when a critique record exists on disk and the Scribe has written the matching history entry.
+* `.github/instructions/squad/squad-state.instructions.md` defines proof-of-dispatch: this charter's work counts only when a critique record exists on disk and the matching history entry is written (by the Scribe or `scripts/Write-SquadHandoff.ps1`).
 * `.github/instructions/squad/squad-council.instructions.md` defines the pre-implementation council. When this charter runs as a council member, its objections feed the most-restrictive-wins synthesis rather than standing alone.
 * An objection that survives review is a successful challenge. Never soften or drop an objection to make a run look clean.
 

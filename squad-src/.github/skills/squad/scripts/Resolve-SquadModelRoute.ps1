@@ -48,7 +48,17 @@
 .PARAMETER AsOf
     The date the catalog's staleness is measured against. Defaults to today.
 .PARAMETER Format
-    `json` (default) or `markdown` (a compact table a manual-selection question can show).
+    `json` (default), `markdown` (a compact table a manual-selection question can show), or
+    `compact` (one line per role; with -Bounded, `role: boundedPick (then fallback, fallback; escalate: id)` or
+    `role: normal resolution (reason)`, for a model to read and pass as each dispatch's `model`; the
+    escalate id is the stronger of the agent's frontmatter pin and the ranked pick at the real floor).
+.PARAMETER Bounded
+    Adds each role's bounded-lane pick (model-routing.md *Bounded Lane Pick*): the lowest-Blended
+    id for the role's class with the floor taken as `fast` and fit at least 2, within the
+    available set (fit, then generation and row order, break a Blended tie). Only mapped
+    `implementation`-class roles get one, and only when routing is `off`; every other class and
+    `ranked`/`manual` mode keep normal resolution. -Bounded adds `boundedPick` and
+    `boundedRationale` and never changes `resolved`, `suggested`, or any other field.
 .EXAMPLE
     ./Resolve-SquadModelRoute.ps1 -SquadRoot .copilot-tracking/squad -AvailableModels claude-sonnet-5.5,gpt-5.6-sol,claude-haiku-4.5
 #>
@@ -68,8 +78,10 @@ param(
 
     [datetime]$AsOf = (Get-Date),
 
-    [ValidateSet('json', 'markdown')]
-    [string]$Format = 'json'
+    [ValidateSet('json', 'markdown', 'compact')]
+    [string]$Format = 'json',
+
+    [switch]$Bounded
 )
 
 $ErrorActionPreference = 'Stop'
@@ -275,11 +287,13 @@ function Get-RankedCandidatesLocal {
         [Parameter(Mandatory)]$Catalog,
         [Parameter(Mandatory)][string]$Class,
         [Parameter(Mandatory)][string[]]$Admitted,
-        [AllowNull()][System.Collections.Generic.HashSet[string]]$Available
+        [AllowNull()][System.Collections.Generic.HashSet[string]]$Available,
+        [int]$MinFit = 1,
+        [switch]$CostFirst
     )
 
     $eligible = @($Catalog.Fit | Where-Object {
-            $_.Scores[$Class] -ge 1 -and
+            $_.Scores[$Class] -ge $MinFit -and
             $Catalog.Capability.ContainsKey($_.Id) -and
             $Catalog.Capability[$_.Id] -in $Admitted -and
             ($null -eq $Available -or $Available.Contains($_.Id))
@@ -291,9 +305,15 @@ function Get-RankedCandidatesLocal {
     $comparer = [System.Comparison[object]] {
         param($a, $b)
         $byFit = $b.Scores[$Class].CompareTo($a.Scores[$Class])
-        if ($byFit -ne 0) { return $byFit }
         $byCost = $a.Blended.CompareTo($b.Blended)
-        if ($byCost -ne 0) { return $byCost }
+        if ($CostFirst) {
+            if ($byCost -ne 0) { return $byCost }
+            if ($byFit -ne 0) { return $byFit }
+        }
+        else {
+            if ($byFit -ne 0) { return $byFit }
+            if ($byCost -ne 0) { return $byCost }
+        }
         if ($a.Family -eq $b.Family) {
             $byGeneration = $b.Generation.CompareTo($a.Generation)
             if ($byGeneration -ne 0) { return $byGeneration }
@@ -308,6 +328,56 @@ function Get-RankedCandidatesLocal {
 
 $teamPath = Join-Path -Path $SquadRoot -ChildPath 'team.md'
 if (-not (Test-Path -LiteralPath $teamPath -PathType Leaf)) { throw "team.md not found under $SquadRoot." }
+
+function Get-AgentPinLocal {
+    <#
+    .SYNOPSIS
+        Reads an agent's frontmatter `model:` display name from the repository above .copilot-tracking, or $null.
+    #>
+    param([string]$AgentName, [string]$Root)
+
+    if (-not $AgentName) { return $null }
+    $match = [regex]::Match(([System.IO.Path]::GetFullPath($Root) -replace '\\', '/'), '^(?<repo>.*?)/\.copilot-tracking/')
+    if (-not $match.Success) { return $null }
+    foreach ($dir in @('.github/agents', '.agents/agents', '.claude/agents')) {
+        $base = Join-Path $match.Groups['repo'].Value $dir
+        if (-not (Test-Path -LiteralPath $base -PathType Container)) { continue }
+        foreach ($file in (Get-ChildItem -LiteralPath $base -Recurse -File -Filter '*.md')) {
+            $lines = @([System.IO.File]::ReadLines($file.FullName) | Select-Object -First 40)
+            if ($lines.Count -lt 2 -or $lines[0].Trim() -ne '---') { continue }
+            $name = $null
+            $model = $null
+            for ($i = 1; $i -lt $lines.Count -and $lines[$i].Trim() -ne '---'; $i++) {
+                if ($lines[$i] -match '^name:\s*(.+?)\s*$') { $name = $Matches[1].Trim('"', "'") }
+                elseif ($lines[$i] -match '^model:\s*(.+?)\s*$') { $model = (($Matches[1].Trim('[', ']').Split(',')[0]).Trim().Trim('"', "'") -replace '\s*\([^)]*\)\s*$', '').Trim() }
+            }
+            if ($name -ceq $AgentName) { return $model }
+        }
+    }
+    return $null
+}
+
+function Get-EscalationTarget {
+    <#
+    .SYNOPSIS
+        The stronger of the agent's pin and the ranked pick at the role's real floor (fit for the class, a tie to the higher capability class).
+    #>
+    param($Catalog, [string]$Class, [string]$Suggested, [string]$PinName)
+
+    $pinId = $null
+    if ($PinName) { $pinId = @($Catalog.DisplayName.Keys | Where-Object { $Catalog.DisplayName[$_] -eq $PinName }) | Select-Object -First 1 }
+    if (-not $pinId) { return $Suggested }
+    if (-not $Suggested -or $Suggested -eq $pinId) { return $pinId }
+    $rank = @{ 'fast-lightweight' = 0; 'balanced' = 1; 'code-specialized' = 1; 'frontier-reasoning' = 2 }
+    $pinFit = @($Catalog.Fit | Where-Object { $_.Id -eq $pinId })
+    $pickFit = @($Catalog.Fit | Where-Object { $_.Id -eq $Suggested })
+    if ($pinFit.Count -eq 0 -or $pickFit.Count -eq 0) { return $Suggested }
+    if ($pinFit[0].Scores[$Class] -ne $pickFit[0].Scores[$Class]) { return $(if ($pinFit[0].Scores[$Class] -gt $pickFit[0].Scores[$Class]) { $pinId } else { $Suggested }) }
+    $pinRank = if ($rank.ContainsKey([string]$Catalog.Capability[$pinId])) { $rank[[string]$Catalog.Capability[$pinId]] } else { 0 }
+    $pickRank = if ($rank.ContainsKey([string]$Catalog.Capability[$Suggested])) { $rank[[string]$Catalog.Capability[$Suggested]] } else { 0 }
+    if ($pinRank -gt $pickRank) { return $pinId }
+    return $Suggested
+}
 
 $catalog = Get-CatalogLocal -Path (Join-Path -Path $ReferencesRoot -ChildPath 'model-catalog.md')
 $classMap = Get-RoleClassMapLocal -Path (Join-Path -Path $ReferencesRoot -ChildPath 'model-routing.md')
@@ -378,7 +448,26 @@ $results = foreach ($row in $roster.Rows) {
         default { $suggested }
     }
 
-    [pscustomobject][ordered]@{
+    $boundedPick = $null
+    $boundedRationale = $null
+    $boundedFallbacks = @()
+    if ($Bounded) {
+        if ($effectiveMode -eq 'manual') { $boundedRationale = 'manual routing wins' }
+        elseif ($effectiveMode -ne 'off') { $boundedRationale = 'routing ranked: the lane keeps the Model cell' }
+        elseif ($classSource -ne 'mapped' -or $class -ne 'implementation') { $boundedRationale = "$class role: normal resolution" }
+        elseif ($stale) { $boundedRationale = 'stale-catalog fallback' }
+        else {
+            $boundedRanked = @(Get-RankedCandidatesLocal -Catalog $catalog -Class $class -Admitted @(Get-AdmittedClassesLocal -Tier 'fast' -Purpose 'ranked') -Available $available -MinFit 2 -CostFirst)
+            if ($boundedRanked.Count -gt 0) {
+                $boundedPick = $boundedRanked[0].Id
+                $boundedFallbacks = @($boundedRanked | Select-Object -Skip 1 -First 2 | ForEach-Object { $_.Id })
+                $boundedRationale = "rank 1 of $($boundedRanked.Count) in $class at fit $($boundedRanked[0].Scores[$class]), floor fast, fit >= 2, lowest blended rate"
+            }
+            else { $boundedRationale = 'no eligible id at fit >= 2: normal resolution' }
+        }
+    }
+
+    $entry = [ordered]@{
         role        = $roleId
         memberName  = $row['Member Name']
         class       = $class
@@ -399,6 +488,14 @@ $results = foreach ($row in $roster.Rows) {
                 }
             })
     }
+    if ($Bounded) {
+        $entry['boundedPick'] = $boundedPick
+        $entry['boundedFallbacks'] = $boundedFallbacks
+        $entry['boundedRationale'] = $boundedRationale
+        $primaryName = @('Agent Name (Primary)', 'Primary Agent', 'Primary', 'Agent' | ForEach-Object { [string]$row[$_] } | Where-Object { $_ }) | Select-Object -First 1
+        $entry['boundedEscalation'] = Get-EscalationTarget -Catalog $catalog -Class $class -Suggested $suggested -PinName (Get-AgentPinLocal -AgentName ([string]$primaryName).Trim('`') -Root $SquadRoot)
+    }
+    [pscustomobject]$entry
 }
 
 $report = [pscustomobject][ordered]@{
@@ -419,11 +516,29 @@ if ($Format -eq 'json') {
 
 "Model routing: $effectiveMode (recorded: $($roster.Mode)); availability: $availability"
 foreach ($warning in $warnings) { "WARN: $warning" }
+if ($Format -eq 'compact') {
+    foreach ($result in $results) {
+        if ($Bounded) {
+            if ($result.boundedPick) {
+                $parts = @()
+                if (@($result.boundedFallbacks).Count -gt 0) { $parts += "then $(@($result.boundedFallbacks) -join ', ')" }
+                $parts += "escalate: $(if ($result.boundedEscalation) { $result.boundedEscalation } else { 'the agent pin' })"
+                "$($result.role): $($result.boundedPick) ($($parts -join '; '))"
+            }
+            else { "$($result.role): normal resolution ($($result.boundedRationale))" }
+        }
+        else { "$($result.role): $(if ($result.resolved) { $result.resolved } else { "normal resolution ($($result.rationale))" })" }
+    }
+    return
+}
 ''
-'| Role | Class | Floor | Suggested | Model cell | Cell status |'
-'|------|-------|-------|-----------|------------|-------------|'
+$boundedHead = if ($Bounded) { ' Bounded pick |' } else { '' }
+$boundedRule = if ($Bounded) { '-------------|' } else { '' }
+"| Role | Class | Floor | Suggested | Model cell | Cell status |$boundedHead"
+"|------|-------|-------|-----------|------------|-------------|$boundedRule"
 foreach ($result in $results) {
     $suggestedText = if ($result.suggested) { $result.suggested } else { "— ($($result.rationale))" }
     $cellText = if ($result.modelCell) { $result.modelCell } else { '—' }
-    "| $($result.role) | $($result.class) | $($result.floor) | $suggestedText | $cellText | $($result.cellStatus) |"
+    $boundedCell = if ($Bounded) { " $(if ($result.boundedPick) { $result.boundedPick } else { '—' }) |" } else { '' }
+    "| $($result.role) | $($result.class) | $($result.floor) | $suggestedText | $cellText | $($result.cellStatus) |$boundedCell"
 }
