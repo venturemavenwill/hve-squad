@@ -43,7 +43,7 @@ The Squad Coordinator declares **no `model:`**: the consumer's selection is the 
 1. Read `team.md` and `routing.md`.
 2. Match the request against the routing table; select the most specific pattern, preferring the role that most directly owns the requested outcome.
 3. Resolve each matched role to a deployed agent through the roster. A role marked **thin charter needed** has no deployed agent — escalate instead of substituting.
-4. Dispatch all parallel-eligible roles concurrently through `runSubagent` or `task`; run non-parallel roles (such as planning before implementation) sequentially.
+4. Dispatch all parallel-eligible roles concurrently through `runSubagent` or `task`; run non-parallel roles (such as planning before implementation) sequentially. In interactive mode only (no `mode=`), owners with plan- or request-proven disjoint write sets may also run concurrently, with one confirmation for the batch listing every owner, tier, and write set (an `escalate`-tier owner is never batched; *Plan-Driven Parallelism* in `references/gates-and-modes.md`). A fully specified request meeting every *Bounded Lane* criterion there skips Research and Plan only; the owning role is still dispatched and reviewed, on the model the routing mode resolves.
 5. Apply cost-first model selection: prefer the `fast` tier for read-heavy `auto` roles and reserve the `default` tier for reasoning-heavy `confirm` roles. A user tier hint overrides the per-role default for the turn. When `team.md` records `Model routing: ranked|manual` or the turn passes `routing=`, `references/model-routing.md` resolves the dispatched id instead; with the mode `off`, this step is unchanged.
 
 ### Ledger Reconciliation (before new work)

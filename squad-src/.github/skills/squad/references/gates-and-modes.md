@@ -50,7 +50,7 @@ The council is the operator's pre-implementation cross-check. The coordinator tr
 
 ## Implementation Gate Procedure
 
-The Implementation Gate is what makes the squad a methodology instead of a router. It holds in **every** mode — interactive, autonomous, and autopilot — and on every profile, because the methodology spine (`researcher`, `lead`, `developer`, `tester`) is seeded into every roster. The full protocol lives in `.github/instructions/squad/squad-routing.instructions.md`; the operator's view is:
+The Implementation Gate is what makes the squad a methodology instead of a router. It holds in **every** mode — interactive, autonomous, and autopilot — and on every profile, because the methodology spine (`researcher`, `lead`, `developer`, `tester`) is seeded into every roster. The one sanctioned shortcut is the **bounded lane** below, which waives Research and Plan in interactive mode only (no `mode=`) under strict criteria and never waives dispatch or review. The full protocol lives in `.github/instructions/squad/squad-routing.instructions.md`; the operator's view is:
 
 1. The gate fires before dispatching any role that **produces the turn's substantive output** — implementation, a build, a deploy, a merge, or a deliverable owned by a deliverable-producing role (`analyst`, `product-owner`, `designer`, `experimenter`, `presenter`, `technical-writer`, `data-scientist`). A BRD, a roadmap, a journey map, an experiment plan, and a deck are outputs of the methodology, not shortcuts around it.
 2. **Implementation may not begin cold.** Confirm all three on disk, by listing the directory and reading the file, before dispatching the producing role:
@@ -59,6 +59,28 @@ The Implementation Gate is what makes the squad a methodology instead of a route
    * a non-`Stop` Council Verdict for the topic when the request crosses two or more council-member domains — if missing, run the council row first.
 3. When a precondition is unmet, dispatch the missing stage or escalate. **Never produce the missing research, plan, or verdict inline**, and never advance because the request "is only a document". Skipping research and plan to reach the deliverable faster is the single most common way a squad turn degrades into one model improvising, and it is invisible afterwards because the deliverable still looks finished.
 4. On the verdict: `Go` or `Go-With-Conditions` permits dispatch with the conditions attached as inputs; `Stop` escalates. A user may override `Stop`, and the override is recorded through the Scribe before any dispatch.
+
+### Bounded Lane (Interactive Mode Only)
+
+A fully specified, low-risk request does not need Research and Plan to be safe, and running them anyway is the most common way a squad turn spends many times what the work warrants. The bounded lane waives **only** those two stages, and only when **ALL** of these hold:
+
+* The request names the exact target files or artifacts and the exact change.
+* There are no open questions or unknowns.
+* A single owning role does the work, or independent items each have one owner and disjoint write sets.
+* No council domain is crossed.
+* No Impactful-Action Gate or Risk Gate trigger applies, and no intake or discovery gate trigger applies.
+
+**Any doubt means the full pipeline.** A `pipeline=full` input forces it, and `mode=autonomous` and `mode=autopilot` never use the lane. The lane changes how many stages run, never who runs them: the coordinator still dispatches the owning role through `runSubagent` or `task` — never inline — still dispatches `tester` as the closing stage under *Review Follow-Through*, and still hands every stage to the Scribe. The Scribe's decision entry records `Route: bounded` and the criteria check (each criterion with the request evidence that satisfied it), so the shortcut is auditable afterwards.
+
+**Independent of model routing.** The lane decides which stages run, never which model runs them. Every dispatch on the lane, the closing `tester` included, keeps its normal model resolution under the active routing mode (`references/model-routing.md`): the `Model` cell when one is set, otherwise the agent's pin or the session model.
+
+**Bounded owner brief.** The dispatch to each bounded owner carries the exact target files (its full write set, every file and directory it may touch), the exact change, the validation command, the change-record path, and the line `bounded: read only the named files and the change-record convention; do not explore the repository, but you may search for references to any symbol, heading, or link you change; if a dependent outside the named files needs a change, return "blocked: not bounded" without editing it`. A `blocked: not bounded` return leaves the lane for the full pipeline, and the closing reviewer checks dependents of the changed symbols. The owner still follows the repository coding-standards instructions for every file it touches, still runs the validation, and still writes the change record last, ending with `Status: complete`; the skill's phase loop collapses to one phase for a bounded dispatch. Before the closing review, apply the *Owner Finish Barrier* in `references/operating-procedure.md`.
+
+**Brief first.** With `pwsh` 7+ and an initialized squad root, `scripts/Get-SquadDispatchBrief.ps1 -SquadRoot <root> -SessionModel <id>` prints in one read-only call what the coordinator otherwise discovers turn by turn: the next hand-off `turn`, federation, cost-ceiling and ledger status, the roster by header name (agent, dispatchability, pin, `Model` cell when the roster has that column, rate row, deliverable root), ready consumption objects, the Scribe's `Write-SquadHandoff.ps1` command line, and this section, the *Owner Finish Barrier*, and the hand-off payload shape verbatim. When its `coverage:` line covers the request, the coordinator reads no reference, agent file, or rate table; otherwise it reads its references whole (`view` `forceReadLargeFiles: true`, since the CLI refuses a whole file over 20,480 bytes without it), each once per turn. `references/profiles-and-packs.md` is read only for Init, a roster change, or a pack proposal.
+
+### Plan-Driven Parallelism (Interactive Mode Only)
+
+In interactive mode (no `mode=`) the role's `Parallel-Eligible` flag is not the only way to run owners concurrently. When the Lead plan's `Implement Shape` is `deliverable-fan-out` — or a bounded request lists independent items — the coordinator may dispatch those owners concurrently when their write sets are disjoint (no shared file, and no deliverable that consumes another's output). The disjointness must be shown by the plan or the request, never inferred from budget: cost is not a reason to parallelize. Obtain the routing tier's confirmation once for the whole batch, not once per owner; that one confirmation lists every owner, its tier, and its write set, and an `escalate`-tier owner is never batched. Scribe single-writer, one hand-off per stage, and per-stage `history/<agent>.md` entries are unchanged. When disjointness is unproven, dispatch sequentially in dependency order. Autopilot's own fan-out, below, is unchanged.
 
 ### Review Follow-Through
 

@@ -1,0 +1,6 @@
+---
+bump: patch
+type: Changed
+---
+
+- **Dispatch brief replaces coordinator discovery turns.** New read-only `scripts/Get-SquadDispatchBrief.ps1` prints, in one call under the Copilot CLI's 20,480-byte inline output limit, what the coordinator used to find out one turn at a time: UTC time, next hand-off `turn`, federation, cost-ceiling, ledger and model-routing status, the concurrency cap, the roster read from `team.md` by column header (agent, dispatchability for the Step 1b precheck, model pin, the `Model` cell when the roster has that column, rate row and tier, deliverable root), ready consumption objects from the dispatch-size estimator, the `Write-SquadHandoff.ps1` command line the Squad Scribe runs, and the verbatim Bounded Lane, Owner Finish Barrier, and hand-off payload shape. It picks no model. The coordinator runs it first; when its `coverage:` line covers the request it reads no reference, agent file, or rate table, otherwise it reads its references whole with `forceReadLargeFiles` (the CLI refuses whole files over 20,480 bytes without it). In paired live runs on the same three-item bounded task (3 runs each, Sonnet 5 coordinator), the median moved from 369 s / 101.2 credits without the brief to 307 s / 67.3 credits with it, 3 of 3 runs verified; those runs also passed the owners a cheaper bounded model pick, which this change does not include.

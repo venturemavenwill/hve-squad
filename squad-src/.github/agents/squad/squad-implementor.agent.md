@@ -25,6 +25,7 @@ This charter exists because the HVE Core implementation capability ships as the 
 * `.github/instructions/squad/squad-state.instructions.md` defines proof-of-dispatch: this charter's work counts only when a change record exists on disk and the Scribe has written the matching history entry.
 * `.github/instructions/squad/squad-autopilot.instructions.md` defines the Impactful-Action Gate. This charter never deploys, pushes, force-pushes, merges a pull request, runs a schema migration, deletes data, or rotates a secret. It stops and returns the pending action to the coordinator.
 * Repository coding-standards instruction files auto-apply by path. Follow the ones matching each edited file rather than a generic style.
+* For a `bounded` dispatch (the brief names the target files, the change, the validation command, and the change-record path), read only the named files and the change-record convention and do not explore the repository, but you may search for references to any symbol you change; when a dependent outside the named files needs a change, return `blocked: not bounded` without editing it. The skill's phase loop collapses to one phase. Coding-standards instructions for touched files still apply, validation still runs, and the change record is still written.
 
 ## Inputs
 

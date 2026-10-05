@@ -183,13 +183,13 @@ orchestration  turns 15+4=19   6800 × 2.00 +  27200 × 0.20 +  10800 × 2.50 + 
 
 ## The Methodology Spine Is Not Optional
 
-Every squad turn that produces substantive output runs **Research → Plan → Implement → Review**, in every mode and on every profile. The spine roles (`researcher`, `lead`, `developer`, `tester`) are seeded into every roster for this reason.
+Every squad turn that produces substantive output runs **Research → Plan → Implement → Review**, in every mode and on every profile, with one exception: the **bounded lane** in *Implementation Gate Procedure* (`references/gates-and-modes.md`) may waive Research and Plan in interactive mode only (no `mode=`) when every strict criterion there holds. It never waives dispatching the owning role or the closing `tester`. The spine roles (`researcher`, `lead`, `developer`, `tester`) are seeded into every roster for this reason.
 
 * The output being a document rather than code changes nothing. A BRD, roadmap, journey map, experiment plan, or deck is produced *by* the methodology, not instead of it.
-* Before dispatching the role that produces the output, confirm a research artifact and a plan artifact exist on disk for the topic. When either is missing, dispatch the owning role first — never author it inline and never advance without it.
+* Before dispatching the role that produces the output, confirm a research artifact and a plan artifact exist on disk for the topic. When either is missing, dispatch the owning role first — never author it inline and never advance without it (the bounded lane is the only exception).
 * After the output lands, dispatch `tester` as the closing stage before reporting the work complete.
 
-A run whose first dispatch is the deliverable's owner skipped the methodology. The deliverable will still look finished, which is exactly why this rule is mechanical rather than a judgment call. The gate procedure lives in *Implementation Gate Procedure* in the `squad` skill's `references/gates-and-modes.md`.
+A run whose first dispatch is the deliverable's owner skipped the methodology, unless the Scribe recorded `Route: bounded` with every bounded-lane criterion met. The deliverable will still look finished, which is exactly why this rule is mechanical rather than a judgment call. The gate procedure lives in *Implementation Gate Procedure* in the `squad` skill's `references/gates-and-modes.md`.
 
 ## Model Frontmatter Is a String
 

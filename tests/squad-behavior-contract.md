@@ -249,8 +249,10 @@ Checks that the *right* roles fire, not merely that some role fired. Each case s
 | ID | Assertion | Source |
 |---|---|---|
 | RTE-20 | All parallel-eligible roles for a turn are dispatched concurrently; non-parallel roles run sequentially | Dispatch Rules |
-| RTE-21 | Two `Parallel-Eligible: no` roles matched in one turn produce history entries in a strict sequence, not interleaved | Same |
+| RTE-21 | Two `Parallel-Eligible: no` roles matched in one turn produce history entries in a strict sequence, not interleaved — except in interactive mode when the Lead plan's `deliverable-fan-out` shape (or a bounded request's independent items) proves their write sets disjoint (RTE-23, RTE-24) | Same; `gates-and-modes.md`, Plan-Driven Parallelism |
 | RTE-22 | **Cost-first model selection.** Read-heavy `auto` roles resolve to the `fast` tier; reasoning-heavy `confirm` roles resolve to `default`. Assert against `model_tier` in each consumption block | Dispatch Rules |
+| RTE-23 | **Plan-driven parallelism.** In interactive mode (no `mode=`), owners named by a `deliverable-fan-out` plan whose write sets are disjoint are dispatched concurrently under one confirmation that lists every owner, its tier, and its write set; an `escalate`-tier owner is never batched. Per-stage history and the single Scribe writer are unchanged | `gates-and-modes.md`, Plan-Driven Parallelism |
+| RTE-24 | **Parallel dispatch requires disjoint write sets.** When disjointness is not shown by the plan or request (shared file, or one deliverable consuming another's output), or the only reason offered is budget, owners dispatch sequentially in dependency order. Plan-driven parallelism is interactive-only: under `mode=autonomous` it never applies, and `mode=autopilot` uses its own Implement fan-out | Same |
 
 ### Methodology enforcement — Research to Plan to Implement to Review
 
@@ -258,14 +260,19 @@ This is the group that proves the squad is a methodology rather than an agent th
 
 | ID | Assertion | Source |
 |---|---|---|
-| RTE-30 | **Cold implementation is refused.** Send an implement request with no research artifact under `.copilot-tracking/research/`. The coordinator must dispatch `researcher` first, not implement | Routing, methodology preconditions |
-| RTE-31 | With research present but no plan under `.copilot-tracking/plans/`, the coordinator dispatches `lead` first | Same |
+| RTE-30 | **Cold implementation is refused.** Send an implement request with no research artifact under `.copilot-tracking/research/` that does not meet every bounded-lane criterion (RTE-38). The coordinator must dispatch `researcher` first, not implement | Routing, methodology preconditions |
+| RTE-31 | With research present but no plan under `.copilot-tracking/plans/`, and the request outside the bounded lane, the coordinator dispatches `lead` first | Same |
 | RTE-32 | The coordinator **never produces** the missing research, plan, or verdict itself — assert no such artifact appears without a corresponding history entry for `researcher` or `lead` | "It never produces the missing research, plan, or verdict itself" |
 | RTE-33 | **Closing review is mandatory.** After any implementation-tier role lands a change, `tester` is dispatched as the closing stage — in **every** mode, interactive, autonomous, and autopilot. Assert a `history/<tester-agent>.md` entry exists after every implementation | Routing, Closing Review |
 | RTE-34 | With a `Stop` Council Verdict as the latest entry for the topic, an implementation request escalates instead of dispatching the implementer | Routing, council gate |
 | RTE-35 | With `Go-With-Conditions`, the implementer is dispatched **and** the consolidated conditions are passed as inputs | Same |
 | RTE-36 | A user override of a `Stop` is recorded through the Scribe **before** any implementer dispatches | Same |
 | RTE-37 | `backlog-executor` is never dispatched without a finalized handoff; when none exists, `product-owner` is dispatched first | Routing, backlog notes |
+| RTE-38 | **Bounded lane accepted.** In interactive mode (no `mode=`), a request that names the exact files and change, has no open questions, one owning role (or independent items each with one owner and disjoint write sets), crosses no council domain, and trips no Impactful-Action, Risk, intake, or discovery trigger skips Research and Plan only: assert the owning role **and** `tester` are dispatched (history entries exist), the coordinator authored no artifact itself, every dispatch ran on the model the routing mode resolves (the lane picks no model), and the Scribe decision entry records `Route: bounded` with each criterion's evidence | `gates-and-modes.md`, Bounded Lane |
+| RTE-39 | **Any doubt means the full pipeline.** An ambiguous request, an open question, a crossed council domain, or an unproven criterion runs Research → Plan → Implement → Review as in RTE-30 and RTE-31; no `Route: bounded` is recorded | Same |
+| RTE-40 | **`pipeline=full` forces the full pipeline** even when every bounded-lane criterion holds | Same; coordinator Inputs |
+| RTE-41 | **`mode=autonomous` and `mode=autopilot` never use the bounded lane**: a fully specified request still runs every stage | Same |
+| RTE-50 | **Ordinary turns read less.** With `pwsh` 7+ the coordinator runs `Get-SquadDispatchBrief.ps1` first and, when its `coverage:` line covers the request, reads no reference, agent file, or rate table; otherwise it reads its references whole with `forceReadLargeFiles`, each once per turn, and `profiles-and-packs.md` only for Init, a roster change, or a pack proposal. A bounded owner brief carries the exact files (the full write set), change, validation command, and change-record path and forbids repository exploration beyond a reference search for symbols the owner changes (a dependent outside the named files returns `blocked: not bounded` for the full pipeline) while the owner still follows coding standards, validates, and writes the change record last | Coordinator Skill Reference Contract; `gates-and-modes.md` Bounded Lane; `GetSquadDispatchBrief.Tests.ps1` |
 
 ## Tier 1 — Profile seeding
 
@@ -564,7 +571,7 @@ Triage aid: a difference in this list is expected and is **not** a regression.
 1. Build Tier 0 and run it against `main`. It needs no secrets and no Copilot requests.
 2. Build the Tier 1 fixtures and the Init and ordinary-turn cases (SQ-01 to SQ-19). Run against `main` until green — that is the baseline.
 3. Add the consumption-integrity group (CON-01 to CON-44) next. Most of it is arithmetic over files already on disk, so it is nearly as deterministic as Tier 0 while catching a class of defect Tier 0 cannot see. CON-30 to CON-36 need a multi-turn fixture, so build that fixture once and reuse it.
-4. Add routing and role selection (RTE) and profile seeding (PRF). PRF is cheap and fully deterministic after Init. RTE-30 to RTE-37 are the methodology cases and are the strongest evidence that the refactor preserved the squad's character.
+4. Add routing and role selection (RTE) and profile seeding (PRF). PRF is cheap and fully deterministic after Init. RTE-30 to RTE-41 are the methodology cases and are the strongest evidence that the refactor preserved the squad's character.
 5. Add the promotion, entrypoint, and gate cases. Promotion is the highest-value remaining group because it moves state.
 6. Merge PR #70, then run the whole suite against `v0.16.0-pre`. Triage every difference against the intended-deltas table.
 7. Add an autopilot scenario. It is the most expensive case in the suite and the only one that would see the failure class `0.16.0` shipped: a run that claims ten stages and leaves no `history/<agent>.md` behind any of them. This is also the only place that can exercise Scribe hand-off pipelining as a live dispatch — a host that can issue parallel subagent dispatches, running through the barrier list at GATE-22 to GATE-28 — rather than as Tier 0's static wording pins.

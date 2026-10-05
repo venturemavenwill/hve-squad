@@ -15,7 +15,7 @@ The squad has three operating modes. They are selected per turn through the `/sq
 
 | Mode                     | Opt-in              | Who approves what                                                                                                  |
 |--------------------------|---------------------|-------------------------------------------------------------------------------------------------------------------|
-| Interactive (default)    | no `mode` flag      | The human approves **each stage** (research, plan, implement, review). A notification fires at every stage gate.    |
+| Interactive (default)    | no `mode` flag      | The human approves **each stage that runs** (research, plan, implement, review; the bounded lane skips research and plan). A notification fires at every stage gate.    |
 | `mode=autonomous`        | `mode=autonomous`   | A narrow validator loop: the council re-validates a single implementer output (max 2 cycles). See `.github/instructions/squad/squad-autonomous.instructions.md`. |
 | `mode=autopilot`         | `mode=autopilot`    | The human approves **only** impactful actions and the **final outcome**. Everything in between runs autonomously.   |
 
