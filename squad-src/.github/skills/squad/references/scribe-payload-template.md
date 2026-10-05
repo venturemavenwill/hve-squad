@@ -16,8 +16,6 @@ This is the one payload shape both coordinators fill at hand-off, in this sectio
 
 ## 1. Invariant Instructions (Byte-Stable — Fill Nothing Here)
 
-Read, do not edit, this section on every dispatch; it is the stable prefix a cache-aware host reuses.
-
 ### 1.1 Payload Type
 
 State exactly one payload type from the Payload-to-Step Map in [scribe-procedure.md](scribe-procedure.md): `decision`, `history`, `initialization`, `memory`, `Council Verdict`, `autonomous-loop summary`, `autopilot-run summary`, `Intake Readiness Verdict`, `promotion`, `expansion`, or `Discovery Verdict`. The Scribe uses this single field, not the shape of the data below it, to decide which cold file(s) the Cold-File Dispatch Table names — never guess a type from context.
@@ -28,7 +26,7 @@ State the resolved `squadRoot` this payload targets. The default `.copilot-track
 
 ### 1.3 Run Identity
 
-State `run id`, `turn`, `stage` (when the run is autopilot or autonomous), and the coordinator's `timestamp` (current UTC, `yyyy-MM-ddTHH:mm:ssZ`), written verbatim, never derived from local time. These carry into every entry, decision, and ledger row. A script hand-off derives an omitted `turn`, `timestamp`, and `mode`.
+State `run id`, `turn`, `stage` (when the run is autopilot or autonomous), and the coordinator's `timestamp` (current UTC, `yyyy-MM-ddTHH:mm:ssZ`), written verbatim, never derived from local time. A script hand-off derives an omitted `turn`, `timestamp`, and `mode`.
 
 ### 1.4 History Records (When Payload Type Is `history`)
 
@@ -54,7 +52,7 @@ When the coordinator has a shell with `pwsh` 7+, supply `ledgerCommand`: the exa
 
 ### 1.9 Script Hand-off (Scribe-Run, Ordinary Payloads Only)
 
-The Scribe writes a `decision` or `history` payload with `scripts/Write-SquadHandoff.ps1` (*Script Hand-off* in `scribe-procedure.md`); the coordinator hands over this same payload and never runs it. Closed keys: `runId`, `route`?, `since`?, `decision`? {`title`, `rationale`, `adrNoted`}, `historyRecords` [{`agent`, `request`, `deliverable` (one existing file path, optional `(size)`), `outcome`, `title`?, `memberName`?, `selectionCue`?, `passedModel`?, `routingIdentity`?, `consumption`?}], `orchestration`? {`request`?, `outcome`?, `consumption`?}, `stateAdvance` {`activeRoles`, `sessionModel`?, ...}. Derived when omitted: `turn` (state turn + 1), `timestamp` (current UTC), `mode` (`state.json`), each `consumption` (the role class's dispatch-size floors; `model` is `passedModel`, else the agent pin, else the session model; `model_tier` and `priced_as` from its rate row), and `orchestration` (bookkeeping floors at the session model). Anything supplied is validated strictly.
+The Scribe writes a `decision` or `history` payload with `scripts/Write-SquadHandoff.ps1` (*Script Hand-off* in `scribe-procedure.md`); the coordinator hands over this same payload and never runs it. Closed keys: `runId`, `route`?, `since`?, `workstream`?, `launchedAt`?, `decision`? {`title`, `rationale`, `adrNoted`}, `historyRecords` [{`agent`, `request`, `deliverable` (one existing file path, optional `(size)`), `outcome`, `title`?, `memberName`?, `selectionCue`?, `passedModel`?, `routingIdentity`?, `consumption`?}], `orchestration`? {`request`?, `outcome`?, `consumption`?, `leadConsumption`?}, `stateAdvance` {`activeRoles`, `sessionModel`?, ...}. Derived when omitted: `turn` (state turn + 1), `timestamp` (current UTC), `mode` (`state.json`), each `consumption` (the role class's dispatch-size floors; `model` is `passedModel`, else the agent pin, else the session model; `model_tier` and `priced_as` from its rate row), and `orchestration` (bookkeeping floors at the session model). Anything supplied is validated strictly.
 
 ## 2. Per-Dispatch Data (Volatile — Fill Every Turn)
 
@@ -67,6 +65,8 @@ runId: <id>
 turn: <n>
 stage: <stage name, autopilot/autonomous runs only>
 costPreflightReset: <not-requested | omit>
+workstream: <id; Scribe writes * Workstream: line | omit>
+launchedAt: <ISO, with workstream>
 timestamp: <ISO or the entry-heading format in use>
 historyRecords:
   - agent: <name: frontmatter value, verbatim>

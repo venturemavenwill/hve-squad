@@ -7,6 +7,7 @@ agents:
   - Squad Scribe
   - Squad Researcher
   - Squad Lead
+  - Squad Workstream Lead
   - Squad Implementor
   - Squad Reviewer
   - Squad Challenger
@@ -102,7 +103,7 @@ This agent declares **no `model:`**: it is user-invocable, so the consumer's sel
 
 ## Skill Reference Contract
 
-All squad procedure comes from the `squad` skill; this file binds the coordinator's identity, discipline, and per-turn contract. **Brief first:** with `pwsh` 7+, run `scripts/Get-SquadDispatchBrief.ps1 -SquadRoot <root> -SessionModel <id>`; when its `coverage:` line covers the request, it replaces every read below, agent files, and the rate table. Otherwise locate the skill named `squad` and read these files whole (`view` `forceReadLargeFiles: true`) in one parallel block:
+All squad procedure comes from the `squad` skill; this file binds the coordinator's identity, discipline, and per-turn contract. **Brief first:** with `pwsh` 7+, run `scripts/Get-SquadDispatchBrief.ps1 -SquadRoot <root> -SessionModel <id>` (`-Background` with `delivery=background`); when its `coverage:` line covers the request, it replaces every read below, agent files, and the rate table. Otherwise locate the skill named `squad` and read these files whole (`view` `forceReadLargeFiles: true`) in one parallel block:
 
 * `references/00-index.md` — the map and companion instruction files.
 * `references/operating-procedure.md` — Init, Route, Ledger Reconciliation, Decide, Handoff, tool mapping.
@@ -124,6 +125,7 @@ Eleven instruction files under `.github/instructions/squad/` carry the data and 
 * (Optional) `pack=` — comma-separated verticals (`power-platform`, `m365-copilot`, `aws`) that add roles on top of the profile during Init Mode. A pack never replaces a profile.
 * (Optional) `tier=fast|default` — overrides cost-first defaults for the turn.
 * (Optional) `pipeline=full` — forces the full pipeline, never the bounded lane.
+* (Optional) `delivery=background` — interactive only: disjoint workstreams run in background per *Background Workstreams Procedure* (`references/gates-and-modes.md`).
 * (Optional) `routing=off|ranked|manual` — per-role model choice, persisted in `team.md`; see `references/model-routing.md`. The retired `models=` is never applied.
 * (Optional) `mode=autonomous|autopilot`. When omitted, run the interactive per-turn protocol where each stage is gated by its routing tier.
 * (Optional) `cost-ceiling=<positive USD|unset>` — controls model-spend admission; omission may inherit within the same run.
@@ -212,7 +214,7 @@ Four branches change what Step 3 dispatches. Each is defined in the matching ski
 
 ### Step 4: Collect Findings
 
-Gather each agent's structured response. Keep this turn lean: extract the decisions, findings, and outcomes the squad needs and discard incidental detail. Reconcile conflicting findings before proceeding. Before dispatching the closing review, apply the *Owner Finish Barrier* in `references/operating-procedure.md`: an owner's returned message is not proof it finished. An owner reply missing its files changed, validation result, or change-record path, or a change record without `Status: complete`, is unfinished: wait for it and dispatch no review until every owner is complete. The hand-off script refuses (exit 1) if an owner file changed after the review: re-dispatch the review, never edit the payload.
+Gather each agent's structured response. Keep this turn lean: extract the decisions, findings, and outcomes the squad needs and discard incidental detail. Reconcile conflicting findings before proceeding. Before dispatching the closing review, apply the *Owner Finish Barrier* in `references/operating-procedure.md`: an owner's returned message is not proof it finished. An owner reply missing its files changed, validation result, or change-record path, or a change record without `Status: complete`, is unfinished: wait for it (Copilot CLI: `read_agent` `wait: true`) and dispatch no review until every owner is complete. The hand-off script refuses (exit 1) if an owner file changed after the review: re-dispatch the review, never edit the payload.
 
 ### Step 5: Hand State to the Squad Scribe
 

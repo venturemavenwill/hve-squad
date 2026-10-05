@@ -180,4 +180,16 @@ Describe 'Get-SquadDispatchBrief.ps1' {
         $result = Invoke-Brief -Repo (New-BriefRepo -StubLedger)
         $result.Output | Should -Match ([regex]::Escape('ledger: stub (do not dispatch the Scribe to repair it'))
     }
+
+    It 'embeds the Background Workstreams Procedure only with -Background, still under the inline output limit' {
+        $repo = New-BriefRepo
+        (Invoke-Brief -Repo $repo).Output | Should -Not -Match '(?m)^## Background Workstreams Procedure'
+        $before = Get-TreeHash -Root $repo
+        $result = Invoke-Brief -Repo $repo -Extra @('-SessionModel', 'claude-sonnet-5', '-Background')
+        $result.ExitCode | Should -Be 0
+        $result.Output | Should -Match '(?m)^## Background Workstreams Procedure \(Interactive Mode Only\)'
+        $result.Output | Should -Match ([regex]::Escape('Hand each workstream''s payload to the Squad Scribe'))
+        [System.Text.Encoding]::UTF8.GetByteCount($result.Output) | Should -BeLessThan 20480
+        Get-TreeHash -Root $repo | Should -Be $before
+    }
 }

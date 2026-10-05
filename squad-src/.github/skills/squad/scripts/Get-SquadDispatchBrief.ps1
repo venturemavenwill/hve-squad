@@ -24,7 +24,8 @@
         `references/consumption-rates-template.md`;
       - hand-off: the `Write-SquadHandoff.ps1` command line the Squad Scribe runs;
       - procedure: the verbatim Bounded Lane and Owner Finish Barrier sections and the
-        hand-off payload shape, so a bounded request needs no whole reference file.
+        hand-off payload shape (plus the Background Workstreams Procedure with -Background),
+        so a bounded request needs no whole reference file.
 
     It never picks a model: the roster's `Model` cell, the agent pin, or the session model
     is what each dispatch runs on. The script writes nothing. Exit codes: 0 brief printed;
@@ -35,6 +36,8 @@
     The repository root that holds `.github/agents/`. Defaults to the current directory.
 .PARAMETER SessionModel
     The coordinator's session model id, used for the orchestration consumption object.
+.PARAMETER Background
+    Also embed the Background Workstreams Procedure, for a `delivery=background` request.
 .EXAMPLE
     & .agents/skills/squad/scripts/Get-SquadDispatchBrief.ps1 -SquadRoot .copilot-tracking/squad -SessionModel claude-sonnet-5
 #>
@@ -45,7 +48,9 @@ param(
 
     [string]$RepoRoot = (Get-Location).Path,
 
-    [string]$SessionModel
+    [string]$SessionModel,
+
+    [switch]$Background
 )
 
 Set-StrictMode -Version Latest
@@ -345,6 +350,10 @@ $out.Add('')
 $out.Add('### Hand-off payload shape (from Script Hand-off, operating-procedure.md)')
 $out.Add('')
 $out.Add((Get-PayloadShape))
+if ($Background) {
+    $out.Add('')
+    $out.Add((Get-Section 'gates-and-modes.md' '## Background Workstreams Procedure'))
+}
 
 $text = $out -join "`n"
 # The CLI spills shell output over 20,480 bytes to a temp file, costing extra read turns.

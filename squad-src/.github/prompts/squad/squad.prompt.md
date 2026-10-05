@@ -1,7 +1,7 @@
 ---
 description: "Hands a request to the Squad Coordinator, which routes it to a cast of HVE Core agents and persists squad state"
 agent: Squad Coordinator
-argument-hint: "request=... [profile=default|full|security|design|accessibility|architecture|azure|modernization|compliance|operations|product] [pack=power-platform|m365-copilot|aws] [discovery=quick|standard|deep|skip] [tier=...] [owner=...] [mode=autonomous|autopilot] [cost-ceiling=<positive USD|unset>] [routing=off|ranked|manual]"
+argument-hint: "request=... [profile=default|full|security|design|accessibility|architecture|azure|modernization|compliance|operations|product] [pack=power-platform|m365-copilot|aws] [discovery=quick|standard|deep|skip] [tier=...] [owner=...] [mode=autonomous|autopilot] [cost-ceiling=<positive USD|unset>] [routing=off|ranked|manual] [delivery=background]"
 ---
 
 # Squad
