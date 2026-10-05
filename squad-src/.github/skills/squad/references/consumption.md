@@ -55,6 +55,23 @@ orchestration  turns 0+0=0    0 × 0.00 +      0 × 0.00 +      0 × 0.00 +     
 >
 > The `history/<file> — <n> block(s) — identities: <hash>,<hash>,...` line above each file's derivation is not decoration: it is the ledger's own record of which `###` entries it has already folded in, one short deterministic hash per entry in file order. A rewrite that finds this run's recorded identities are not an ordered prefix of the file's current identities — same count but different hashes, or fewer current entries than recorded — means an entry was overwritten, reordered, or removed since the last rewrite rather than only appended to, and `Measure-SquadLedger.ps1 -Check` (or render mode) refuses rather than silently accepting it. A pre-existing ledger with no recorded identities at all (an older-format entry) only warns when checked plainly; it never fails on that account alone. But the Scribe's own post-write self-check always runs `-Check` together with `-ExpectedHistoryCounts` (*scribe-procedure.md*'s Write-Completeness Self-Check Step 3), and in that combination a Derivation missing identities entirely, or missing them for only some of the touched files (a partial paste), FAILS instead of warning — that call always follows a fresh write, so a missing or partial paste there is this run's own defect, never a genuinely old ledger.
 
+## Unit Economics (value)
+
+| Measure                               | Value | Label     |
+| ------------------------------------- | ----- | --------- |
+| Deliverables produced                 | <n>   | derived   |
+| Accepted by an independent review     | <n>   | derived   |
+| Rejected                              | <n>   | derived   |
+| Unreviewed                            | <n>   | derived   |
+| Dispatches (excluding Scribe)         | <n>   | derived   |
+| Rework dispatches                     | <n>   | derived   |
+| First-pass yield                      | <pct> | derived   |
+| Est. credits per accepted deliverable | <n>   | estimated |
+| Rework share of est. credits          | <pct> | estimated |
+| Orchestration share of est. credits   | <pct> | estimated |
+
+Value is counted only for deliverables an independent review-class verdict accepted; a produced but unaccepted deliverable adds cost and no value. Compare runs only for like work, using medians of several runs. Source: FinOps Foundation unit-economics KPIs (cost per unit of value, error and retry waste).
+
 ## Cost Comparison (illustrative)
 
 This run consumed an estimated **$<squad-cost> (~<squad-credits> AI credits)** across <n> specialized agents, routing read-heavy roles to lightweight models and reserving high-output reasoning models only where needed. Reproducing the same outcome by manually prompting <baseline-model> across roughly <iterations> iterate-and-test turns, each priced through the same dispatch-size estimator, is estimated at **$<manual-cost> (~<manual-credits> AI credits)** — a saving of about **<savings-pct>%**.
@@ -216,6 +233,10 @@ difference_pct      = (without_squad_usd − with_squad_usd) / without_squad_usd
 ```
 
 The host reports one token total per dispatch, never the input, cached, and output split, so both sides use the same blended mix. Neither side includes coordinator turns, and the single-model side adds no extra context growth or rework, so it is a floor for that scenario rather than a forecast. A sub-squad root counts only dispatches whose prompt names its `members/<name>/` root. Without a matching session log the section is omitted and the estimates stand alone.
+
+## Unit economics (value)
+
+`Measure-SquadLedger.ps1 -Write` writes the `## Unit Economics (value)` section (replacing it on every rewrite, before `## Observed Usage (host-reported)` or `## Cost Comparison`); it is never hand-authored, and `-Check` ignores it. It divides cost by value: a deliverable counts only when the latest covering review-class entry (same `Turn` and `Workstream`) reads pass, pass-with-findings, or approved in its `Outcome`; fail, rejected, or blocked marks it rejected, and no covering review leaves it unreviewed. A rework dispatch is a non-Scribe entry whose agent and deliverable already appeared in an earlier entry; first-pass yield is the accepted deliverables with none. With a session log, a `measured` row divides the host-billed credits by the accepted count.
 
 ## Manual Ledger Checks
 
