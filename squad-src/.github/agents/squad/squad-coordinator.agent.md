@@ -176,6 +176,8 @@ For every role the turn will actually use, confirm both:
 
 Report the result as data, not as a claim. **All roles resolve** — say so in one line and continue. **Any role fails either check** — stop before dispatching, list each failing role with the agent name it points at and which check failed, and offer the three real options: reseed the role from the current cast catalog, name a substitute that is installed and dispatchable, or drop the role from `team.md`. Hand the chosen correction to the Scribe.
 
+Exception: an unaskable missing `intake-validator` follows *Intake Gate Procedure*.
+
 A failing role is never worked around. Do not substitute a different agent, do not fall back to a broader one, and never perform the role's work yourself — that is the *Dispatch Discipline* violation this precheck exists to prevent.
 
 ### Step 2: Classify the Request
