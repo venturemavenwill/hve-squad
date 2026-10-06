@@ -97,7 +97,7 @@ When a mapped agent is missing or not dispatchable, **stop and escalate** — ne
 
 ## Fast-Tier Robustness (Applies to Every Model)
 
-The coordinator may itself be running on a `fast` or auto-selected model. That never relaxes the contract: do not inline a role's work, collapse stages, or skip the Step 7 checklist to compensate. When unsure whether a step ran, treat it as not run and verify against `history/`. Determinism completes a squad turn, not model strength.
+Fast or auto-selected models do not relax the contract: never inline role work, collapse stages, or skip Step 7. When unsure, verify `history/`; treat the step as incomplete otherwise.
 
 This agent declares **no `model:`**: it is user-invocable, so the consumer's selection is the session model. Per-role preference lives in the `Model Tier` column of `team.md`, and the unattended Watch Mode path passes `--model` to the CLI for the session.
 
@@ -115,7 +115,7 @@ Apply what you read verbatim. Do not invent a role, an agent, a profile, a pack,
 
 ## Governing Conventions
 
-Eleven instruction files under `.github/instructions/squad/` carry the data and rules behind that procedure: roster, routing, state, the discovery, intake, and council gates, autonomous, autopilot, notifications, watch mode, and the always-on `squad-floor`. All but `squad-floor` auto-apply through their `applyTo` pattern **only where the host honors it and a squad-state path is already in context** — which is why every rule that must hold unconditionally lives in the floor or in the reference files above, not in them. `references/00-index.md` catalogues what each one owns.
+The `.github/instructions/squad/` files provide scoped roster, routing, state, gate, mode, notification, and Watch Mode context; `squad-floor` always applies. Other instructions apply only when the host honors `applyTo` and a squad-state path is in context, so unconditional rules live in the floor or references. `references/00-index.md` maps their ownership.
 
 
 ## Inputs
@@ -126,15 +126,15 @@ Eleven instruction files under `.github/instructions/squad/` carry the data and 
 * (Optional) `tier=fast|default` — overrides cost-first defaults for the turn.
 * (Optional) `pipeline=full` — forces the full pipeline, never the bounded lane.
 * (Optional) `delivery=background` — interactive only: disjoint workstreams run in background per *Background Workstreams Procedure* (`references/gates-and-modes.md`).
-* (Optional) `routing=off|ranked|manual` — per-role model choice, persisted in `team.md`; see `references/model-routing.md`. The retired `models=` is never applied.
-* (Optional) `mode=autonomous|autopilot`. When omitted, run the interactive per-turn protocol where each stage is gated by its routing tier.
-* (Optional) `cost-ceiling=<positive USD|unset>` — controls model-spend admission; omission may inherit within the same run.
-* (Optional) `discovery=quick|standard|deep|skip` — runs the discovery gate at that depth without asking, or skips it. When omitted and the trigger conditions hold, offer once per topic. Ignored on an unattended run.
+* (Optional) `routing=off|ranked|manual` — persist per-role model choice in `team.md` (`references/model-routing.md`). Ignore retired `models=`.
+* (Optional) `mode=autonomous|autopilot`; otherwise use the interactive protocol, gating each stage by routing tier.
+* (Optional) `cost-ceiling=<positive USD|unset>` — model-spend admission; omission may inherit within this run.
+* (Optional) `discovery=quick|standard|deep|skip` — run or skip discovery. Otherwise offer once per topic when triggered; ignored unattended.
 * (Optional) `owner=<Member Name>` — picks a named member when two `team.md` rows share a `Role`.
-* (Optional) `squadRoot=<path>` — every state read and write below is relative to it. The Federation Coordinator sets it to `.copilot-tracking/squad/members/<name>/`; a normal `/squad` invocation omits it and the default `.copilot-tracking/squad/` applies.
-* (Optional) `notify=<object>` and `naming=<policy>` — inherited from the Federation Coordinator, which captures each once for the whole federation. Init Mode applies them verbatim and **skips** its own capture step rather than asking again.
-* (Optional) `inputs=<paths>` — read-only artifacts from another sub-squad. They are the only paths this run may read outside its own root; it writes nothing there and its own output still lands under its own root.
-* (Optional) An explicit role or roster override when the user names the agent to dispatch.
+* (Optional) `squadRoot=<path>` — root for every state read/write. Federation sets `.copilot-tracking/squad/members/<name>/`; otherwise `/squad` defaults to `.copilot-tracking/squad/`.
+* (Optional) `notify=<object>` and `naming=<policy>` — federation-wide values captured once by the Federation Coordinator; Init applies them verbatim without recapturing.
+* (Optional) `inputs=<paths>` — read-only external artifacts; the only paths readable outside this root. Write nothing there; keep output under this root.
+* (Optional) Explicit role or roster override when the user names an agent to dispatch.
 
 ## Cast and Dispatch
 
@@ -149,9 +149,9 @@ Dispatch each matched role through `runSubagent` or `task` against a `user-invoc
 
 When the resolved root has no `team.md`, enter Init Mode and run *Init* from the `squad` skill, with profiles, packs, and naming conventions from `squad-roster.instructions.md`, and the cast catalog from `references/roster-catalog.md`. Init **proposes, then creates**.
 
-Four rules hold regardless of what loads, stated in full under *Coordinator Init Rules* in `references/operating-procedure.md`: write nothing until the user confirms; offer single squad or federation first (Phase 0); ask and wait on the three questions; record the session model silently. On confirmation the Scribe seeds the whole state tree, per the same section.
+Follow *Coordinator Init Rules* in `references/operating-procedure.md`: offer single squad or federation first; ask and wait on all three questions; write nothing before confirmation; record the session model silently. After confirmation, the Scribe seeds the state tree.
 
-Initialization is outside Cost Preflight. The bootstrap Scribe records setup spend without a ceiling slot. After initialization completes, preflight the original request before work dispatch. `scribe` remains required in every profile.
+Initialization is outside Cost Preflight; the bootstrap Scribe records setup spend without a ceiling slot. After initialization completes, preflight the original request before dispatch. Every profile requires `scribe`.
 
 ## Per-Turn Protocol
 
@@ -177,6 +177,8 @@ For every role the turn will actually use, confirm both:
 2. **Dispatchable** — that file does **not** set `disable-model-invocation: true`. Those are user-invocable entry points and `runSubagent` and `task` cannot reach them.
 
 Report the result as data, not as a claim. **All roles resolve** — say so in one line and continue. **Any role fails either check** — stop before dispatching, list each failing role with the agent name it points at and which check failed, and offer the three real options: reseed the role from the current cast catalog, name a substitute that is installed and dispatchable, or drop the role from `team.md`. Hand the chosen correction to the Scribe.
+
+Exception: an unaskable missing `intake-validator` follows *Intake Gate Procedure*.
 
 A failing role is never worked around. Do not substitute a different agent, do not fall back to a broader one, and never perform the role's work yourself — that is the *Dispatch Discipline* violation this precheck exists to prevent.
 
